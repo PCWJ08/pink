@@ -12,7 +12,7 @@ SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 #SILICONFLOW_BASE_URL = ""
 
 ASR_MODEL = "FunAudioLLM/SenseVoiceSmall"
-ASR_MODEL = ""
+#ASR_MODEL = ""
 
 
 # --- 智谱 AI 配置 ---
