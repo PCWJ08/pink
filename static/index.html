@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>专属陪伴</title>
+    <link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+    <div id="setup-page" class="page active">
+        <div class="setup-card">
+            <h1>Welcome</h1>
+            <p>为了给你更好的陪伴，请告诉我...</p>
+            <input type="text" id="nickname-input" placeholder="你的专属昵称" maxlength="8">
+            <div class="gender-select">
+                <button class="gender-btn active" data-gender="male">我是男生</button>
+                <button class="gender-btn" data-gender="female">我是女生</button>
+            </div>
+            <button id="enter-btn" disabled>开启心动房间</button>
+        </div>
+    </div>
+
+    <div id="chat-page" class="page">
+        <div class="topbar">
+            <span id="display-name">未命名</span> 的房间
+        </div>
+        
+        <div class="system-banner">
+            💡 与你的专属陪伴体聊天吧~
+        </div>
+
+        <div id="messages"></div>
+
+        <!-- 底部输入区 -->
+        <div class="input-area">
+            <!-- 语音按钮放到最左边 -->
+            <button id="voice-btn" class="voice-btn">按住说话</button>
+            <!-- 输入框包裹层放到右边 -->
+            <div class="input-wrapper">
+                <input type="text" id="chat-input" class="chat-input" placeholder="发消息...">
+                <button id="send-btn" class="send-btn">发送</button>
+            </div>
+        </div>
+        
+        <div class="footer-sign">未登录 · 亲署</div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
