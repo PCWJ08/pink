@@ -1,6 +1,9 @@
 import os
 
+HOST = "0.0.0.0"
 
+# 云端会自动分配端口，本地默认用 8000
+PORT = int(os.getenv("PORT", 8000))
 
 # --- 硅基流动 语音识别 (ASR) 配置 ---
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
