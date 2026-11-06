@@ -9,25 +9,26 @@ PORT = int(os.getenv("PORT", 8000))
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
 
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+#SILICONFLOW_BASE_URL = ""
 
 ASR_MODEL = "FunAudioLLM/SenseVoiceSmall"
+ASR_MODEL = ""
 
 
 # --- 智谱 AI 配置 ---
-ZHIPU_API_KEY =os.getenv("ZHIPU_API_KEY", "")
-#os.getenv("ZHIPU_API_KEY", "")
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
 
 ZHIPU_BASE_URL = "https://apihub.agnes-ai.com/v1"
-#"https://open.bigmodel.cn/api/paas/v4/"
+#ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 
 ZHIPU_MODEL = "agnes-3.0-flash"
-#"glm-4-flash-250414"
+#ZHIPU_MODEL = "glm-4-flash-250414"
 
 
 
-# ==========================================
+# ===========================
 # 剧本与音色配置
-# ==========================================
+# ===========================
 # 男生剧本：御姐 + 甜妹
 MALE_SCRIPT = {
     "御姐": {
