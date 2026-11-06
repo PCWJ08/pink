@@ -133,7 +133,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_text = await audio_to_text(audio_b64)
                 
                 if user_text and user_text != "（没听清）":
-                    print(f"👤 [语音] {user_name} 识别: {user_text}", flush=True)
+                    print(f"👤 [语音] {user_name}: {user_text}", flush=True)
                     chat_history.append(f"用户: {user_text}")
                     if len(chat_history) > 20: chat_history.pop(0)
                     
