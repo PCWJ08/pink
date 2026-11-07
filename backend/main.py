@@ -47,10 +47,10 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal last_interaction_time, is_ai_talking
         
         while True:
-            await asyncio.sleep(3) 
+            await asyncio.sleep(2) 
             
-            # 冷场超过 6 秒，触发看戏模式
-            if time.time() - last_interaction_time > 6 and not is_ai_talking:
+            # 冷场超过 4 秒，触发看戏模式
+            if time.time() - last_interaction_time > 4 and not is_ai_talking:
                 is_ai_talking = True
                 try:
                     ai_list = ["御姐", "甜妹"] if user_gender == "male" else ["暖男", "霸总"]
@@ -113,8 +113,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     if len(chat_history) > 20: chat_history.pop(0)
                     await send_ai_voice(ai1_name, reply_text)
 
-                    # 🌟 等待 1.4 秒，AI2 自由发挥（取消强制反驳，让它自己看上下文）
-                    await asyncio.sleep(1.4)
+                    # 🌟 等待 1.5 秒，AI2 自由发挥（取消强制反驳，让它自己看上下文）
+                    await asyncio.sleep(1.5)
                     prompt2 = f"用户说：'{user_text}'，{ai1_name}刚刚回复了：'{reply_text}'。你作为{ai2_name}，请自然地接一句话，可以附和、吐槽或者延伸话题。极短15字以内："
                     reply_text2 = await game_ai.generate_ai_reply(ai2_name, prompt2, user_gender, user_name, chat_history)
                     
