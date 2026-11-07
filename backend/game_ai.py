@@ -57,7 +57,7 @@ async def text_to_base64_audio(text: str, ai_name: str, gender: str) -> str:
     try:
         # 根据 AI 的名字，定制不同的语速和语调
         if   "御姐" in ai_name:
-            rate, pitch = "-8%", "-4Hz"   # 御姐：语速慢，声音沉稳
+            rate, pitch = "+1%", "-4Hz"   # 御姐：语速慢，声音沉稳
         elif "甜妹" in ai_name:
             rate, pitch = "-4%", "+14Hz"   # 甜妹：正常语速，音调拉高（甜美）
         elif "暖男" in ai_name:
