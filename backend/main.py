@@ -27,6 +27,9 @@ async def websocket_endpoint(websocket: WebSocket):
     # 辅助函数：发语音（加入了异常保护）
     async def send_ai_voice(ai_name, text):
         if not text: return
+
+        print(f"🤖 [ AI ]({user_name}): {text}", flush=True)
+        
         audio_base64 = await game_ai.text_to_base64_audio(text, ai_name, user_gender)
         if not audio_base64: return
         
@@ -49,8 +52,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await asyncio.sleep(2) 
             
-            # 冷场超过 4 秒，触发看戏模式
-            if time.time() - last_interaction_time > 4 and not is_ai_talking:
+            # 冷场超过 5 秒，触发看戏模式
+            if time.time() - last_interaction_time > 5 and not is_ai_talking:
                 is_ai_talking = True
                 try:
                     ai_list = ["御姐", "甜妹"] if user_gender == "male" else ["暖男", "霸总"]
@@ -96,7 +99,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_gender = msgData.get("gender", "male")
                 user_name = msgData.get("username", "主人") 
                 
-                print(f"👤 [打字] {user_name}: {user_text}", flush=True)
+                print(f"\n👤 [打字] {user_name} : {user_text}", flush=True)
                 chat_history.append(f"用户: {user_text}")
                 if len(chat_history) > 20: chat_history.pop(0)
                 
@@ -133,7 +136,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_text = await audio_to_text(audio_b64)
                 
                 if user_text and user_text != "（没听清）":
-                    print(f"👤 [语音] {user_name}: {user_text}", flush=True)
+                    print(f"\n👤 [语音] {user_name} : {user_text}", flush=True)
                     chat_history.append(f"用户: {user_text}")
                     if len(chat_history) > 20: chat_history.pop(0)
                     
@@ -153,7 +156,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 hour = msgData.get("hour", 12) # 前端传过来的本地时间
 
                 room_type = "男生" if user_gender == "male" else "女生"
-                print(f"✔️ [连接] {user_name}: 进入了{room_type}专属房间", flush=True)
+                print(f"✔️ [连接] {user_name} : 进入了{room_type}专属房间", flush=True)
                 
                 ai_list = ["御姐", "甜妹"] if user_gender == "male" else ["暖男", "霸总"]
                 ai_name = random.choice(ai_list)
@@ -173,11 +176,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         if "WebSocketDisconnect" not in str(type(e)) and "disconnect" not in str(e).lower():
             room_type = "男生" if user_gender == "male" else "女生"
-            print(f"❌ [断开] {user_name}: 离开了{room_type}专属房间\n", flush=True)
+            print(f"❌ [断开] {user_name} : 离开了{room_type}专属房间", flush=True)
     finally:
         auto_chat_task.cancel()
         room_type = "男生" if user_gender == "male" else "女生"
-        print(f"❌ [断开] {user_name}: 离开了{room_type}专属房间\n", flush=True)
+        print(f"❌ [断开] {user_name} : 离开了{room_type}专属房间", flush=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

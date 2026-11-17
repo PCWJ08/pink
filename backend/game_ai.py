@@ -3,6 +3,7 @@ import edge_tts
 import re
 from openai import AsyncOpenAI
 import config
+import asyncio
 
 llm_client = AsyncOpenAI(
     base_url=config.ZHIPU_BASE_URL,
@@ -30,20 +31,21 @@ async def generate_ai_reply(ai_name: str, user_text: str, gender: str, username:
 3. 绝对不要重复聊天记录里说过的话。
 
 请直接输出你的回复（不超过15个字）："""
-    
+
     try:
         response = await llm_client.chat.completions.create(
             model=config.ZHIPU_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=30,
-            temperature=0.9
+            max_tokens=20,
+            temperature=1
         )
         result = response.choices[0].message.content.strip()
         result = re.sub(r'[“”"\'\(\)]', '', result)
         return result[:20]
+    
     except Exception as e:
         print(f"❗️ [模型报错]: {e}", flush=True)
-        return ""
+        return""
         
 async def text_to_base64_audio(text: str, ai_name: str, gender: str) -> str:
     # 🌟 如果文本为空或只有标点，直接返回，不去请求
@@ -57,18 +59,18 @@ async def text_to_base64_audio(text: str, ai_name: str, gender: str) -> str:
     try:
         # 根据 AI 的名字，定制不同的语速和语调
         if   "御姐" in ai_name:
-            rate, pitch = "+1%", "-4Hz"   # 御姐：语速慢，声音沉稳
+            rate, pitch, volume = "+33%", "+15Hz" , "+4%"   # 御姐：沉稳
         elif "甜妹" in ai_name:
-            rate, pitch = "-4%", "+14Hz"   # 甜妹：正常语速，音调拉高（甜美）
+            rate, pitch, volume = "+13%", "+14Hz", "+5%"   # 甜妹：甜美
         elif "暖男" in ai_name:
-            rate, pitch = "-8%", "+0Hz"   # 暖男：温柔中等语速
+            rate, pitch, volume = "+3%" , "-4Hz" , "+5%"   # 暖男：温柔
         elif "霸总" in ai_name:
-            rate, pitch = "-4%", "-10Hz"   # 霸总：语速稍快，低音炮
+            rate, pitch, volume = "+17%" , "-10Hz", "+9%"  # 霸总：霸道
         else:
-            rate, pitch = "-10%", "+5Hz"   # 默认
+            rate, pitch, volume = "+10%", "+5Hz" , "+5%"   # 默认：正常
 
         # 传参给 Edge-TTS
-        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch, volume=volume)
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
