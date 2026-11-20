@@ -6,21 +6,20 @@
 
 两个人格、同一屋檐、语音往返
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Edge TTS](https://img.shields.io/badge/TTS-Edge--TTS-ff8eaa?style=flat-square)](https://github.com/rany2/edge-tts)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](Dockerfile)
+[![在线试玩](https://img.shields.io/badge/在线试玩-ai.weidenglu.com-ff8eaa?style=flat-square&logo=googlechrome&logoColor=white)](https://ai.weidenglu.com)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![PWA](https://img.shields.io/badge/PWA-可安装到桌面-5A0FC8?style=flat-square&logo=pwa&logoColor=white)](https://ai.weidenglu.com)
 [![License](https://img.shields.io/badge/License-MIT-ff8eaa?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-Pink Room 不是又一个「输入问题、输出回答」的对话框，它是一个**房间**。房间里住着两个性格相反的角色：你说话时，一个回应你；1.5 秒后另一个插话，附和、吐槽，或者把话题拽走。你沉默超过 5 秒，它们会自己聊下去。
+**在线试玩**：<https://ai.weidenglu.com>
 
-每条回复都会被合成语音推回来——带波形、带秒数、带未读红点，也带「转文字」。前端不刷新、不断流，全程一条 WebSocket 连接。
+Pink Room 不是「输入问题、输出回答」的对话框，而是一个房间。房间里住着两个性格相反的角色：你说话时，一个回应你；1.4 秒后另一个插话，附和、吐槽，或者把话题拽走。你沉默超过 15 秒，它们会自己找话题。
 
-> ⚠️ **使用前必读**：本项目**不内置任何 API Key**，需要自备密钥并完成配置，否则 AI 不会说话。详见 [配置密钥](#配置密钥必读)。
+回复由浏览器直接念出来，带波形、秒数、未读红点，也能展开成文字。页面可以安装到桌面，下次从图标打开，像一个小应用。
 
 <br>
 
@@ -40,145 +39,63 @@ Pink Room 不是又一个「输入问题、输出回答」的对话框，它是�
 <div align="center">
 <img src="docs/images/preview-setup.jpeg" alt="入场页" width="58%" />
 <br>
-<sub>入场页 · 昵称与性别决定加载哪套剧本（localStorage 按房间隔离）｜ 页脚签名：未登录 · 亲署</sub>
+<sub>入场页 · 昵称与性别决定加载哪套剧本，聊天记录按房间隔离</sub>
 </div>
 
 <br>
 
-## 核心特性
+## 玩法
 
-| 特性 | 说明 |
+| | |
 |---|---|
-| **双人格同场** | 每个房间常驻两个对立人设。A 回复你，B 基于 A 的话再补一句，形成「三人在场」的错位感 |
-| **冷场自循环** | 独立 `asyncio` 任务监听最后交互时间，静默超 5 秒即由随机角色主动开口 |
-| **全语音往返** | 按住说话 → `MediaRecorder` → base64 → WebSocket → SenseVoice 转写；回复 → Edge-TTS 合成 mp3 → 回传直读 |
-| **人设化音色** | 四个角色各自绑定音色，并按性格微调 `rate / pitch / volume`（御姐沉稳、甜妹上扬、霸总低音） |
-| **零后端存储** | 历史只留浏览器 `localStorage`，按「性别 + 昵称」隔离；服务端上下文随连接释放，不落盘 |
-| **一处改人设** | 角色增删、语气修改、换模型通道，都集中在 `config.py`，不必动业务逻辑 |
-
-技术栈：FastAPI · Uvicorn · WebSocket · OpenAI 兼容 SDK · Edge-TTS · 原生 JS（无框架、无构建步骤）。后端仅三个文件，没有数据库与任务队列——所有状态跟着一条连接生灭。
+| **房间** | 男生房住着御姐和甜妹，女生房住着暖男和霸总，性格两两相反 |
+| **对话** | 文字或按住说话；角色 A 先回应，约 1.4 秒后角色 B 接着补一句 |
+| **冷场** | 安静 15 秒后，随机角色主动开口，最多连续两次 |
+| **声音** | 回复自动朗读；点气泡重播，点「转文字」展开字幕 |
+| **记录** | 最近 30 条留在浏览器，按「性别 + 昵称」隔离 |
+| **安装** | 支持 PWA，可添加到桌面，独立窗口打开 |
 
 <br>
 
-## 快速开始
+## 设计
 
-**要求**：Python 3.10+、现代浏览器（需麦克风权限）、两个 API Key（对话必填，语音可选）。
+### 一个 Worker，两种接口
 
-```bash
-git clone https://github.com/PCWJ08/pink.git
-cd pink
+静态页面和 API 挂在同一个 Cloudflare Worker 上，同源，没有跨域。`public/` 交给 Workers Static Assets 直接分发，`/api/*` 进入 Worker。没有数据库，也没有常驻进程。
 
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
+### 双人格调度
 
-cp .env.example .env             # 随后填入密钥，见下方
-```
+一次用户发言拆成两步：
 
-### 配置密钥（必读）
+1. `mode=chat`：随机角色 A 按人设回复
+2. 1.4 秒后 `mode=interject`：角色 B 读取用户原话和 A 的回复，再接一句
 
-| 变量 | 用途 | 必填性 | 获取方式 |
-|---|---|---|---|
-| `ZHIPU_API_KEY` | AI 对话回复 | ✅ **必填** | 见下方「模型通道」 |
-| `SILICONFLOW_API_KEY` | 语音转文字 | ⚠️ 用语音时必填 | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) |
+冷场由前端计时触发 `mode=idle`，进房问候是 `mode=greeting`。四种模式共用 `src/chat.js` 的 prompt 构建，回复统一裁成一句话。
 
-```ini
-# .env
-ZHIPU_API_KEY=your_llm_api_key_here         # 必填：对话模型
-SILICONFLOW_API_KEY=your_siliconflow_key    # 用语音输入时必填
-```
+### 语音链路
 
-`Edge-TTS` 负责把文字念出来，走微软公开接口——**不需要 Key，也不产生费用**。
+- **输入**：MediaRecorder 录音 → Web Audio 解码 → 16kHz 单声道 WAV → `/api/asr` → SenseVoice
+- **输出**：浏览器 `speechSynthesis`，按角色配置的语速和音调朗读
 
-### 启动
+这样 iOS 的 mp4 录音和 Android 的 webm 录音都能走同一条链路，也不需要后端 TTS。
 
-```bash
-cd backend
-uvicorn main:app --reload --port 8000
-```
+### 记忆
 
-打开 <http://127.0.0.1:8000>，输入昵称、选性别、进房间。
+聊天记录只存在 `localStorage`，请求时附带最近 12 条。Worker 不保存会话，实例回收不影响上下文。刷新后还能接着聊，换设备则从空白开始。
 
-> 浏览器只在 `localhost` 或 `https` 下开放麦克风。用局域网 IP 访问时语音会失败，需要自签 HTTPS 或走反向代理。
+### PWA
 
-### 用 Docker 跑
+`manifest.webmanifest` 提供名称、图标与独立窗口；`sw.js` 缓存页面和静态资源，但不缓存 `/api/*`。断网时能打开界面，聊天仍然需要联网。`_headers` 负责 manifest 的 MIME 和 Service Worker 的缓存策略。
 
-```bash
-docker build -t pink .
-docker run -d --name pink -p 8000:80 \
-  -e ZHIPU_API_KEY=your_key \
-  -e SILICONFLOW_API_KEY=your_key \
-  pink
-```
+### 几个取舍
 
-镜像基于 `python:3.10-slim`，启动时会读取平台注入的 `PORT`（未注入则回落到 80），所以同一份镜像既能在本地跑，也能直接丢给云托管。
-
-### 部署到云托管
-
-以腾讯云云托管为例，其余平台同理：
-
-1. 新建服务，代码来源选 GitHub 仓库 `PCWJ08/pink`，自动构建方式选 `Dockerfile`
-2. 端口填 **80**（与 `EXPOSE` 一致）
-3. 环境变量填 `ZHIPU_API_KEY`、`SILICONFLOW_API_KEY`——**不要把 Key 写进 `.env` 一起提交**
-4. 部署后访问平台分配的域名
-
-容器内不写任何文件、不依赖本地存储，因此无需配置持久化卷。
+回复限制在十几个字，是为了像一条语音消息，而不是小作文。没有使用 WebSocket，是因为每个角色只说一句话，前端控制节奏更简单，Worker 也不需要维护长连接。
 
 <br>
 
-## 模型通道
+## 技术栈
 
-`config.py` 预设了两套已验证的通道，改两行注释即可切换。两者都提供免费额度，在「短句高频」场景下延迟与口语化程度都够用——这正是陪聊最需要的两件事。
-
-| 通道 | `ZHIPU_BASE_URL` | `ZHIPU_MODEL` |
-|---|---|---|
-| **Ignis**（默认） | `https://apihub.agnes-ai.com/v1` | `agnes-3.0-flash` |
-| **智谱 AI** | `https://open.bigmodel.cn/api/paas/v4/` | `glm-4-flash-250414` |
-
-```python
-ZHIPU_BASE_URL = "https://apihub.agnes-ai.com/v1"
-# ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
-```
-
-两者都兼容 OpenAI 协议，共用同一个客户端——换供应商只换 `base_url`，业务代码零改动。想接 DeepSeek、Moonshot 或本地 Ollama，同样只需补两行。
-
-<br>
-
-## 角色与音色
-
-角色定义在 `config.py` 的 `MALE_SCRIPT` / `FEMALE_SCRIPT`。用户选择的性别只决定加载哪套剧本，不影响语音识别。
-
-| 房间 | 角色 | 人设 | Edge-TTS 音色 | 语速 / 音调 / 音量 |
-|---|---|---|---|---|
-| 男生 | 御姐 | 温柔成熟的知心姐姐，宠溺撩人 | `zh-TW-HsiaoChenNeural`| `+33%` / `+15Hz` / `+4%` |
-| 男生 | 甜妹 | 活泼粘人的积极学妹，带崇拜感 | `zh-CN-XiaoyiNeural`   | `+13%` / `+14Hz` / `+5%` |
-| 女生 | 暖男 | 阳光体贴的热心学长，情绪价值 | `zh-CN-YunxiNeural`    | `+3%`  / `-4Hz`  / `+5%` |
-| 女生 | 霸总 | 高冷傲慢的低音霸总，占有欲强 | `zh-TW-YunJheNeural`   | `+17%` / `-10Hz` / `+9%` |
-
-新增角色只要追加一项，前端无需改动（角色名由后端随机挑选后随消息下发）：
-
-```python
-MALE_SCRIPT["邻家姐姐"] = {
-    "prompt": "你是住在隔壁的插画师，说话慢、爱笑，喜欢用比喻。回复短，不超过15个字。",
-    "voice": "zh-CN-XiaoxiaoNeural",
-}
-```
-
-<br>
-
-## 通信协议
-
-单端点 `ws://<host>/ws/chat`，帧体为 JSON 字符串。
-
-| 方向 | `type` | 关键字段 |
-|---|---|---|
-| 客户端 → 服务端 | `greeting` | `gender` `username` `hour` |
-| 客户端 → 服务端 | `text` | `content` `gender` `username` |
-| 客户端 → 服务端 | `voice` | `audio`（`data:audio/webm;base64,…`） |
-| 服务端 → 客户端 | `status` | `status: "typing"` |
-| 服务端 → 客户端 | `voice` | `sender` `text` `audio`（`data:audio/mp3;base64,…`）`duration` |
-
-`duration` 按文本长度估算（`max(2, len(text) // 3)`），不额外探测音频时长——回复本就只有十几个字，省一次 IO。
+Cloudflare Workers · Workers Static Assets · 原生 JavaScript · SpeechSynthesis · SenseVoice · OpenAI 兼容对话接口
 
 <br>
 
@@ -186,44 +103,84 @@ MALE_SCRIPT["邻家姐姐"] = {
 
 ```
 pink/
-├── backend/
-│   ├── main.py           # WebSocket 会话、双角色调度、冷场循环
-│   ├── game_ai.py        # 对话生成 + Edge-TTS 合成
-│   ├── voice_ai.py       # SenseVoiceSmall 语音转写
-│   └── config.py         # 模型通道、角色剧本、音色参数
-├── static/
-│   ├── index.html        # 入场页 + 聊天页
-│   ├── app.js            # 录音手势、WebSocket、本地缓存
-│   └── theme.css         # 暗色 + 粉色主题
-├── docs/images/          # 界面截图
-├── Dockerfile
-├── .env.example
+├── public/
+│   ├── index.html
+│   ├── app.js
+│   ├── theme.css
+│   ├── manifest.webmanifest
+│   ├── sw.js
+│   ├── _headers
+│   └── icons/
+├── src/
+│   ├── index.js                # 接口路由、跨域、错误处理
+│   ├── chat.js                 # 人设 prompt 与对话模型调用
+│   ├── asr.js                  # 音频转文字
+│   ├── personas.js             # 角色剧本与朗读参数
+│   └── utils.js                # 超时与上游响应解析
+├── docs/images/
+├── wrangler.jsonc
+├── package.json
+├── README.md
 └── LICENSE
 ```
 
 <br>
 
-## 常见问题
+## 开发说明
 
-**不配 Key 会怎样？**
-页面能打开、能进房间，但 AI 不回复——鉴权失败后 `generate_ai_reply` 返回空串，前端因此收不到语音帧。
+### 角色
 
-**要花钱吗？**
-Edge-TTS 免费；智谱 `glm-4-flash` 是官方免费模型；SenseVoiceSmall 在硅基流动有免费额度。只有把对话量打到额度之外才可能产生费用。
+角色都写在 `src/personas.js`。追加一项即可，前端不需要改，角色名与朗读参数会随接口返回：
 
-**聊天记录会上传吗？**
-不会。历史只在你自己的浏览器 `localStorage` 里，键名 `history_{gender}_{name}`，只留最近 20 条；服务端上下文是连接级变量，断线即销毁。
+```js
+MALE_SCRIPT["邻家姐姐"] = {
+  prompt: "你是住在隔壁的插画师，说话慢、爱笑，喜欢用比喻。",
+  tts: { rate: 0.98, pitch: 1.05, voice: "female" },
+};
+```
 
-**为什么只回十几个字？**
-故意的。`max_tokens=20` 加上 prompt 约束 15 字，是为了让回复像一条语音消息，而不是一段小作文。想放宽就改 `game_ai.py` 里的这两个常量。
+`prompt` 是人设；`tts.rate` 是语速，`tts.pitch` 是音调，`tts.voice` 用来在系统语音里挑男声或女声。
 
-<br>
+### 配置
 
-## 参与贡献
+`wrangler.jsonc` 里的普通变量：
 
-Issue 与 PR 都欢迎。提交前请确认 `python -m compileall backend` 通过，新配置项同步写进 `.env.example` 与本文档。
+| 名称 | 说明 |
+|---|---|
+| `LLM_BASE_URL` | 对话接口地址，兼容 OpenAI 协议 |
+| `LLM_MODEL` | 对话模型名 |
+| `ASR_BASE_URL` | 语音识别接口地址 |
+| `ASR_MODEL` | 语音识别模型名 |
+| `ALLOWED_ORIGIN` | 允许的页面来源，当前是 `https://ai.weidenglu.com` |
 
-后续计划：会话持久化、角色卡导入导出、流式 TTS（边生成边播放）。
+密钥不进入仓库，通过 Cloudflare Worker 的 `LLM_API_KEY` 与 `ASR_API_KEY` 注入。
+
+### 接口
+
+| 地址 | 用途 |
+|---|---|
+| `POST /api/chat` | 文字聊天，支持 `chat` / `interject` / `idle` / `greeting` |
+| `POST /api/asr` | 音频转文字，请求体为音频二进制 |
+| `GET /api/health` | 检查模型地址与密钥是否就绪 |
+
+失败时统一返回：
+
+```json
+{ "ok": false, "error": { "code": "UPSTREAM_TIMEOUT", "message": "..." } }
+```
+
+### 限制
+
+| 项目 | 数值 |
+|---|---|
+| 单条回复 | 24 字（prompt 约束 15 字） |
+| 上下文 | 最近 12 条 |
+| 本地记录 | 30 条 |
+| 音频 | 10MB |
+| 上游超时 | 对话 15 秒，识别 25 秒 |
+| 冷场 | 15 秒，最多连续 2 次 |
+
+项目以 Cloudflare Workers 运行，静态资源与接口同源；本地开发使用 `wrangler dev`。
 
 <br>
 
@@ -233,7 +190,7 @@ Issue 与 PR 都欢迎。提交前请确认 `python -m compileall backend` 通�
 
 可自由使用、修改、分发，含商业用途，只需保留版权与许可声明。
 
-> 角色均由大语言模型实时生成，不代表任何真实人物，也不构成情感或心理建议。请勿用于冒充真人、情感操控或任何违法用途。
+> 角色均由大语言模型实时生成，不代表任何真实人物，也不构成情感或心理建议。
 
 <br>
 
