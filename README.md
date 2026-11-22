@@ -74,10 +74,10 @@ Pink Room 不是「输入问题、输出回答」的对话框，而是一个房�
 
 ### 语音链路
 
-- **输入**：MediaRecorder 录音（webm/mp4）→ 浏览器解码、重采样成 16kHz 单声道 WAV → `/api/asr` → Workers AI `whisper-large-v3-turbo`
+- **输入**：MediaRecorder 录音（webm/mp4）→ 浏览器解码、重采样成 16kHz 单声道 WAV → `/api/asr` → 硅基流动 `FunAudioLLM/SenseVoiceSmall`
 - **输出**：`/api/tts` → Microsoft Edge TTS → mp3；音色、语速、音调由角色配置决定
 
-浏览器不再使用 `speechSynthesis` 朗读。Whisper turbo 对 webm/opus 容器不稳定，所以录音先在浏览器里转成 WAV；这样 iOS 的 mp4 和 Android 的 webm 都能走同一条链路。
+浏览器不再使用 `speechSynthesis` 朗读。录音先在浏览器里转成 16kHz 单声道 WAV，既方便 SenseVoice 识别，也避免手机浏览器直接播放 webm/mp4 Blob 时无声。
 
 Edge TTS 没有官方 HTTP API，也没有 SLA；Worker 通过出站 WebSocket 连接微软语音服务。微软调整令牌或端点时，`/api/tts` 会返回 502，前端只显示文字，不会退回机械的浏览器朗读。
 
@@ -85,7 +85,7 @@ Edge TTS 没有官方 HTTP API，也没有 SLA；Worker 通过出站 WebSocket �
 
 对话默认使用智谱 `glm-4-flash`，失败（限流、超时、鉴权）时自动切到硅基流动的 `Qwen/Qwen2.5-7B-Instruct`。两条通道都失败才向用户报错，避免单一供应商限流把房间卡死。
 
-语音识别使用 Workers AI 的共享免费额度：每天 10,000 Neuron，UTC 0 点重置；Whisper turbo 约 46.63 Neuron/音频分钟，折算约 214 分钟音频/天。它不是“每天 10,000 条请求”，额度由账号下所有 Workers AI 调用共享。
+语音识别使用硅基流动 SenseVoice。`SILICONFLOW_API_KEY` 同时用于对话备胎和语音识别；如果只配置智谱 Key，文字聊天可用，但语音识别不可用。
 
 ### 日志
 
@@ -95,13 +95,18 @@ Worker 日志统一为：
 [1.2.3.4]：小明 打字：在吗
 [1.2.3.4]：小明 语音：在吗
 [1.2.3.4]：小明 进入男生专属房间
-AI：御姐：在呢
+[御姐AI]：在呢
+[甜妹AI]：今天想我了吗
+[暖男AI]：早点休息
+[霸总AI]：过来
 AI 报错：模型/上游服务响应超时
-AI 报错：识别/未绑定 Workers AI
+AI 报错：识别/未配置 SILICONFLOW_API_KEY
 AI 报错：TTS/Edge TTS handshake failed
 ```
 
 用户 IP 来自 Cloudflare 的 `CF-Connecting-IP`，只在 Worker 日志中出现，不会返回给浏览器。实时查看可在 Cloudflare Dashboard 的 `Workers & Pages → pink → Logs`，或使用 `npx wrangler tail pink`。
+
+AI 提示词和输出清洗都禁止 Emoji、颜文字和表情符号，避免 Edge TTS 把它们读成奇怪文字。
 
 ### 记忆
 
@@ -113,13 +118,13 @@ AI 报错：TTS/Edge TTS handshake failed
 
 ### 几个取舍
 
-回复限制在十几个字，是为了像一条语音消息，而不是小作文。没有使用 WebSocket，因为每个角色只说一句话，前端控制节奏更简单，Worker 也不需要维护长连接。
+回复限制在十几个字，是为了像一条语音消息，而不是小作文。没有使用 WebSocket，是因为每个角色只说一句话，前端控制节奏更简单，Worker 也不需要维护长连接。
 
 <br>
 
 ## 技术栈
 
-Cloudflare Workers · Workers AI · Workers Static Assets · 原生 JavaScript · Whisper large-v3-turbo · Edge TTS · 智谱 GLM-4-Flash · 硅基流动
+Cloudflare Workers · Workers Static Assets · 原生 JavaScript · 硅基流动 SenseVoice · Edge TTS · 智谱 GLM-4-Flash · 硅基流动
 
 <br>
 
@@ -138,7 +143,7 @@ pink/
 ├── src/
 │   ├── index.js                # 接口路由、跨域、错误处理
 │   ├── chat.js                 # 人设 prompt 与双通道对话模型
-│   ├── asr.js                  # Workers AI Whisper 音频转文字
+│   ├── asr.js                  # 硅基流动 SenseVoice 音频转文字
 │   ├── tts.js                  # Edge TTS 语音合成入口
 │   ├── edge-tts.js             # Edge TTS WebSocket 协议与令牌
 │   ├── personas.js             # 角色剧本与神经音色参数
@@ -185,6 +190,8 @@ MALE_SCRIPT["邻家姐姐"] = {
 | `LLM_PRIMARY_MODEL` | 主力模型，默认 `glm-4-flash` |
 | `LLM_FALLBACK_BASE_URL` | 备胎对话地址，默认硅基流动 |
 | `LLM_FALLBACK_MODEL` | 备胎模型，默认 `Qwen/Qwen2.5-7B-Instruct` |
+| `ASR_BASE_URL` | 语音识别地址，默认 `https://api.siliconflow.cn/v1` |
+| `ASR_MODEL` | 语音识别模型，默认 `FunAudioLLM/SenseVoiceSmall` |
 | `ALLOWED_ORIGIN` | 允许的页面来源，当前是 `https://ai.weidenglu.com` |
 
 密钥不进入仓库，通过 Cloudflare Worker 的 Secrets 注入：
@@ -192,9 +199,9 @@ MALE_SCRIPT["邻家姐姐"] = {
 | Secret | 用途 |
 |---|---|
 | `ZHIPU_API_KEY` | 智谱 GLM 主力 |
-| `SILICONFLOW_API_KEY` | 硅基流动对话备胎 |
+| `SILICONFLOW_API_KEY` | 硅基流动对话备胎 + 语音识别 |
 
-Edge TTS 不需要 Key；Workers AI 通过 `wrangler.jsonc` 的 `ai.binding` 绑定，也不需要 Key。
+Edge TTS 不需要 Key；语音识别使用 `SILICONFLOW_API_KEY`，不需要 Workers AI 绑定。
 
 ### 接口
 
@@ -202,7 +209,7 @@ Edge TTS 不需要 Key；Workers AI 通过 `wrangler.jsonc` 的 `ai.binding` 绑
 |---|---|
 | `POST /api/chat` | 文字聊天，支持 `chat` / `interject` / `idle` / `greeting` |
 | `POST /api/asr` | 16kHz 单声道 WAV 音频转文字 |
-| `POST /api/tts` | JSON `{ text, voice, rate, pitch }` → mp3 |
+| `POST /api/tts` | JSON `{ text, voice, rate, pitch, volume }` → mp3 |
 | `GET /api/health` | 检查对话、识别、语音三套配置是否就绪 |
 
 失败时统一返回：
@@ -222,7 +229,6 @@ Edge TTS 不需要 Key；Workers AI 通过 `wrangler.jsonc` 的 `ai.binding` 绑
 | 音频 | 单次最长 10 秒，上限 10MB |
 | 上游超时 | 对话 15 秒，识别 25 秒，语音 20 秒 |
 | 冷场 | 5 秒，持续到你发言 |
-| Workers AI | 10,000 Neuron/天（账号共享，UTC 0 点重置） |
 
 项目以 Cloudflare Workers 运行，静态资源与接口同源；本地开发使用 `wrangler dev`。
 

@@ -12,17 +12,14 @@
     "run_worker_first": ["/api/*", "/manifest.webmanifest"]
   },
 
-  // 语音识别使用 Workers AI 的免费 Neuron 额度
-  "ai": {
-    "binding": "AI"
-  },
-
-  // 非敏感配置放这里；密钥由 Cloudflare 的 Secrets 注入
+  // 语音识别使用硅基流动 SenseVoice
   "vars": {
     "LLM_PRIMARY_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
     "LLM_PRIMARY_MODEL": "glm-4-flash",
     "LLM_FALLBACK_BASE_URL": "https://api.siliconflow.cn/v1",
     "LLM_FALLBACK_MODEL": "Qwen/Qwen2.5-7B-Instruct",
+    "ASR_BASE_URL": "https://api.siliconflow.cn/v1",
+    "ASR_MODEL": "FunAudioLLM/SenseVoiceSmall",
     "ALLOWED_ORIGIN": "https://ai.weidenglu.com"
   },
 

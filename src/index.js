@@ -3,7 +3,7 @@
  *
  * 一个 Worker 同时承担三件事：
  *   1. /api/chat  纯文本聊天（智谱主力 + 硅基流动备胎）
- *   2. /api/asr   音频转文字（Cloudflare Workers AI Whisper）
+ *   2. /api/asr   音频转文字（硅基流动 SenseVoice）
  *   3. /api/tts   文本转语音（Microsoft Edge TTS）
  *   4. 其余请求交给静态资源（Cloudflare Workers Static Assets，目录 public/）
  *
@@ -127,7 +127,7 @@ function mobileManifestResponse() {
 export default {
   /**
    * @param {Request} request
-   * @param {{ASSETS?:{fetch:Function}, AI?:object, ZHIPU_API_KEY?:string, SILICONFLOW_API_KEY?:string, LLM_PRIMARY_API_KEY?:string, LLM_FALLBACK_API_KEY?:string, LLM_PRIMARY_BASE_URL?:string, LLM_PRIMARY_MODEL?:string, LLM_FALLBACK_BASE_URL?:string, LLM_FALLBACK_MODEL?:string, ALLOWED_ORIGIN?:string}} env
+   * @param {{ASSETS?:{fetch:Function}, ZHIPU_API_KEY?:string, SILICONFLOW_API_KEY?:string, LLM_PRIMARY_API_KEY?:string, LLM_FALLBACK_API_KEY?:string, LLM_PRIMARY_BASE_URL?:string, LLM_PRIMARY_MODEL?:string, LLM_FALLBACK_BASE_URL?:string, LLM_FALLBACK_MODEL?:string, ASR_BASE_URL?:string, ASR_MODEL?:string, ALLOWED_ORIGIN?:string}} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -163,13 +163,14 @@ export default {
             time: new Date().toISOString(),
             llmPrimaryConfigured: Boolean(env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY),
             llmFallbackConfigured: Boolean(env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY),
-            asrConfigured: Boolean(env.AI),
+            asrConfigured: Boolean(env.SILICONFLOW_API_KEY || env.ASR_API_KEY),
             ttsConfigured: true,
             llmPrimaryBaseUrl: env.LLM_PRIMARY_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
             llmPrimaryModel: env.LLM_PRIMARY_MODEL || "glm-4-flash",
             llmFallbackBaseUrl: env.LLM_FALLBACK_BASE_URL || "https://api.siliconflow.cn/v1",
             llmFallbackModel: env.LLM_FALLBACK_MODEL || "Qwen/Qwen2.5-7B-Instruct",
-            asrModel: "@cf/openai/whisper-large-v3-turbo",
+            asrBaseUrl: env.ASR_BASE_URL || "https://api.siliconflow.cn/v1",
+            asrModel: env.ASR_MODEL || "FunAudioLLM/SenseVoiceSmall",
             ttsProvider: "edge",
           },
           200,

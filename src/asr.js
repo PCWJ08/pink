@@ -2,17 +2,16 @@
  * 音频转文字接口。
  *
  * 前端把 MediaRecorder 的 webm/mp4 在浏览器里解码，重采样成 16kHz 单声道 WAV，
- * 再以二进制 POST 到 /api/asr。Worker 把 WAV 转成 base64，交给 Workers AI 的
- * Whisper large-v3-turbo 识别。
+ * 再以二进制 POST 到 /api/asr。Worker 使用硅基流动 SenseVoice 识别。
  *
- * 为什么不用硅基流动：免费额度有限流，且 webm 直传在 Whisper turbo 上不稳定。
- * Workers AI 的免费额度按 Neuron 计算，Whisper turbo 约 46.63 Neuron/音频分钟；
- * 每天 10,000 Neuron（UTC 0 点重置）约等于 214 分钟音频，日常短语音足够。
+ * 使用前需要在 Cloudflare 配置 SILICONFLOW_API_KEY。
+ * 录入静音时直接返回 ASR_SILENT，不把空录音送进模型，避免模型幻觉出“在吗”。
  */
 
-import { ApiError } from "./utils.js";
+import { ApiError, fetchUpstream, joinUrl, readUpstreamJson } from "./utils.js";
 
-const MODEL = "@cf/openai/whisper-large-v3-turbo";
+const DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_MODEL = "FunAudioLLM/SenseVoiceSmall";
 const TIMEOUT_MS = 25000;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 
@@ -23,26 +22,56 @@ const WAV_TYPES = new Set([
   "audio/vnd.wave",
 ]);
 
-function bytesToBase64(bytes) {
-  let binary = "";
-  const chunk = 0x8000;
-
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-
-  return btoa(binary);
+function errorMessage(error) {
+  return String(error?.message || error || "unknown").replace(/\s+/g, " ").slice(0, 300);
 }
 
-function withTimeout(promise, ms) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new ApiError(504, "ASR_TIMEOUT", "语音识别超时，请再说一次。"));
-    }, ms);
-  });
+/**
+ * 检查 16k/16bit/mono WAV 的音量，拦截静音或几乎无声的录音。
+ * 只处理前端 encodeWav 生成的固定 44 字节头 WAV。
+ */
+function inspectWav(audio) {
+  if (audio.byteLength < 46) return { silent: true, duration: 0 };
 
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  const view = new DataView(audio);
+  const magic = String.fromCharCode(
+    view.getUint8(0),
+    view.getUint8(1),
+    view.getUint8(2),
+    view.getUint8(3),
+  );
+  if (magic !== "RIFF" || String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11)) !== "WAVE") {
+    return { silent: false, duration: 0 };
+  }
+
+  const channels = view.getUint16(22, true);
+  const sampleRate = view.getUint32(24, true);
+  const dataSize = view.getUint32(40, true);
+  const dataOffset = 44;
+
+  if (channels !== 1 || sampleRate !== 16000 || dataOffset + dataSize > audio.byteLength) {
+    return { silent: false, duration: 0 };
+  }
+
+  let peak = 0;
+  let sumSquares = 0;
+  let samples = 0;
+
+  for (let offset = dataOffset; offset + 1 < dataOffset + dataSize; offset += 2) {
+    const sample = view.getInt16(offset, true) / 32768;
+    const abs = Math.abs(sample);
+    if (abs > peak) peak = abs;
+    sumSquares += sample * sample;
+    samples += 1;
+  }
+
+  const rms = samples ? Math.sqrt(sumSquares / samples) : 0;
+  const duration = samples / sampleRate;
+
+  return {
+    silent: peak < 0.012 || rms < 0.0025 || duration < 0.25,
+    duration,
+  };
 }
 
 /**
@@ -51,9 +80,11 @@ function withTimeout(promise, ms) {
  * @returns {Promise<{text:string}>}
  */
 export async function handleAsr(request, env) {
-  if (!env || !env.AI) {
-    console.error("AI 报错：识别/未绑定 Workers AI");
-    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有启用 Workers AI，语音输入暂时不可用。");
+  env = env || {};
+  const apiKey = String(env?.SILICONFLOW_API_KEY || env?.ASR_API_KEY || "").trim();
+  if (!apiKey) {
+    console.error("AI 报错：识别/未配置 SILICONFLOW_API_KEY");
+    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置 SILICONFLOW_API_KEY，语音输入暂时不可用。");
   }
 
   const contentType = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
@@ -74,26 +105,40 @@ export async function handleAsr(request, env) {
     throw new ApiError(413, "AUDIO_TOO_LARGE", "录音太长了，请控制在 10MB 以内。");
   }
 
-  const audioBase64 = bytesToBase64(new Uint8Array(audio));
-
-  let result;
-  try {
-    result = await withTimeout(
-      env.AI.run(MODEL, {
-        audio: audioBase64,
-        task: "transcribe",
-        vad_filter: true,
-        condition_on_previous_text: false,
-      }),
-      TIMEOUT_MS,
-    );
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-
-    console.error(`AI 报错：识别/${err && (err.message || err)}`);
-    throw new ApiError(502, "ASR_FAILED", "没听清，再说一次吧。");
+  const wav = inspectWav(audio);
+  if (wav.silent) {
+    console.error("AI 报错：识别/录音音量过低或没有检测到说话");
+    throw new ApiError(422, "ASR_SILENT", "没有听到声音，靠近麦克风再说一次。");
   }
 
-  const text = String(result?.text ?? "").replace(/\s+/g, " ").trim();
-  return { text };
+  const baseUrl = env.ASR_BASE_URL || DEFAULT_BASE_URL;
+  const model = env.ASR_MODEL || DEFAULT_MODEL;
+  const form = new FormData();
+  form.append("model", model);
+  form.append("file", new Blob([audio], { type: contentType }), "audio.wav");
+
+  try {
+    const response = await fetchUpstream(
+      joinUrl(baseUrl, "/audio/transcriptions"),
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}` },
+        body: form,
+      },
+      TIMEOUT_MS,
+    );
+    const data = await readUpstreamJson(response, "语音识别");
+    const text = String(data?.text || "").replace(/\s+/g, " ").trim();
+
+    if (!text) {
+      console.error("AI 报错：识别/SenseVoice 返回空文本");
+      throw new ApiError(422, "ASR_EMPTY", "没听清，靠近麦克风再说一次。");
+    }
+
+    return { text };
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    console.error(`AI 报错：识别/${errorMessage(err)}`);
+    throw new ApiError(502, "ASR_FAILED", "语音识别失败，请稍后再试。");
+  }
 }

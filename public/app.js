@@ -48,6 +48,7 @@ const state = {
   queue: [],
   queueRunning: false,
   idleTimer: null,
+  voiceBusy: false,
 };
 
 let typingEl = null;
@@ -600,10 +601,22 @@ function appendUserVoiceBubble(duration, objectUrl) {
   bubble.append(wave, durationEl);
 
   bubble.addEventListener('click', () => {
-    if (!objectUrl) return;
+    if (!objectUrl) {
+      showToast('这段录音暂时无法回放。');
+      return;
+    }
+
     stopAudio();
-    currentAudio = new Audio(objectUrl);
-    currentAudio.play().catch(() => showToast('录音回放失败。'));
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audio.volume = 1;
+    audio.src = objectUrl;
+    audio.load();
+    audio.addEventListener('error', () => {
+      showToast('录音回放失败，请重新录一次。');
+    }, { once: true });
+    currentAudio = audio;
+    audio.play().catch(() => showToast('录音回放失败，请检查浏览器是否静音。'));
   });
   bubble.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -740,13 +753,13 @@ function resetIdleTimer() {
   clearTimeout(state.idleTimer);
   state.idleTimer = null;
 
-  if (!state.name) return;
+  if (!state.name || state.voiceBusy) return;
 
   state.idleTimer = window.setTimeout(runIdle, IDLE_DELAY_MS);
 }
 
 async function runIdle() {
-  if (!state.name || state.busy || state.queueRunning || state.queue.length) return;
+  if (!state.name || state.busy || state.queueRunning || state.voiceBusy || state.queue.length) return;
 
   // 页面不可见时不发起模型请求，等回到前台再继续
   if (document.visibilityState !== 'visible') return;
@@ -936,6 +949,10 @@ function onVoicePressStart(event) {
     pressStartTime = Date.now();
     audioChunks = [];
 
+    // 录音期间暂停冷场主动说话，避免 AI 抢先回复与用户无关的话题。
+    clearTimeout(state.idleTimer);
+    state.idleTimer = null;
+
     try {
       mediaRecorder.start();
     } catch (err) {
@@ -1095,8 +1112,10 @@ async function blobToWav(blob) {
 }
 
 async function handleVoiceBlob(blob, duration) {
-  const objectUrl = URL.createObjectURL(blob);
-  appendUserVoiceBubble(duration, objectUrl);
+  // 语音识别期间不要让冷场 AI 抢先说话，否则会出现“AI 回复与用户无关”。
+  clearTimeout(state.idleTimer);
+  state.idleTimer = null;
+  state.voiceBusy = true;
 
   const ownTyping = !state.busy && !state.queueRunning;
   if (ownTyping) showTyping(true);
@@ -1110,15 +1129,22 @@ async function handleVoiceBlob(blob, duration) {
 
   let wav;
   try {
-    // Whisper turbo 对 webm/opus 容器不稳定，先解码并重采样成 16k 单声道 WAV
+    // Whisper turbo 对 webm/opus 容器不稳定，先解码并重采样成 16k 单声道 WAV。
+    // 同一份 WAV 也用于本地回放，避免 iOS 对 webm/mp4 Blob 播放不兼容。
     wav = await blobToWav(blob);
   } catch (err) {
     console.error(`AI 报错：识别/${err && err.message}`);
     if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
+    const objectUrl = URL.createObjectURL(blob);
+    appendUserVoiceBubble(duration, objectUrl);
     showToast('录音处理失败，请再说一次。');
+    state.voiceBusy = false;
     if (ownTyping) showTyping(false);
     return;
   }
+
+  const playbackUrl = URL.createObjectURL(wav);
+  appendUserVoiceBubble(duration, playbackUrl);
 
   try {
     const data = await requestJson('/api/asr', {
@@ -1135,12 +1161,25 @@ async function handleVoiceBlob(blob, duration) {
       return;
     }
 
+    state.voiceBusy = false;
     enqueueTurn(text, 'voice', audioData, duration);
   } catch (err) {
     if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
     console.error(`AI 报错：识别/${err && err.message}`);
-    showToast('没听清，再说一次吧。');
+
+    if (err && err.code === 'CONFIG_MISSING') {
+      showToast('语音识别未启用，请检查 SILICONFLOW_API_KEY。');
+    } else if (err && err.code === 'ASR_TIMEOUT') {
+      showToast('语音识别超时，请再说一次。');
+    } else if (err && err.code === 'ASR_SILENT') {
+      showToast('没有听到声音，靠近麦克风再说一次。');
+    } else if (err && err.code === 'ASR_EMPTY') {
+      showToast('没听清，靠近麦克风再说一次。');
+    } else {
+      showToast('语音识别失败，请稍后再试。');
+    }
   } finally {
+    state.voiceBusy = false;
     if (ownTyping && !state.busy && !state.queueRunning) showTyping(false);
   }
 }

@@ -122,6 +122,8 @@ ${historyStr || "（暂无历史记录）"}
 1. 正常情况下，保持你的设定和语气。
 2. 但是，如果用户明确向你下达了具体的命令，你要服从用户的指令，可以改变说话方式，满足用户的要求，不要被原本的设定限制。
 3. 绝对不要重复聊天记录里说过的话。
+4. 回复中禁止出现任何 Emoji、颜文字、表情符号或表情字符，只输出纯文字。
+5. 必须紧扣用户最后一句话回答，不要答非所问；不知道就简短追问。
 
 请直接输出你的回复（不超过15个字）：`;
 }
@@ -167,6 +169,10 @@ function cleanReply(raw, speaker, names = []) {
     text = text.replace(new RegExp(`^(?:${prefixes.join("|")})\\s*[：:]\\s*`), "");
   }
   text = text.replace(/^\*+|\*+$/g, "").trim();
+
+  // TTS 会把 Emoji 读成文字，统一剥掉所有表情字符与修饰符。
+  text = text.replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}\u{200D}\u{20E3}]/gu, "");
+  text = text.replace(/\s+/g, " ").trim();
 
   return text.slice(0, MAX_REPLY_CHARS).trim();
 }
@@ -321,12 +327,12 @@ export async function handleChat(payload, env, clientIp = "unknown") {
 
   if (!reply) {
     if (mode === "greeting") {
-      console.log(`AI：${speaker}：你终于来啦~`);
+      console.log(`[${speaker}AI]：你终于来啦~`);
       return { sender: speaker, text: "你终于来啦~", tts: persona.tts, mode };
     }
     throw new ApiError(502, "EMPTY_REPLY", "她刚才走神了，再叫她一次吧。");
   }
 
-  console.log(`AI：${speaker}：${reply}`);
+  console.log(`[${speaker}AI]：${reply}`);
   return { sender: speaker, text: reply, tts: persona.tts, mode };
 }
