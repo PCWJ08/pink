@@ -38,7 +38,6 @@ export async function fetchUpstream(url, init, timeoutMs) {
     if (err && (err.name === "AbortError" || err.name === "TimeoutError")) {
       throw new ApiError(504, "UPSTREAM_TIMEOUT", "上游服务响应超时，请稍后重试。");
     }
-    console.error("[upstream] network error:", err && err.message);
     throw new ApiError(502, "UPSTREAM_UNREACHABLE", "无法连接上游服务，请检查 Base URL 或稍后重试。");
   } finally {
     clearTimeout(timer);
@@ -60,8 +59,6 @@ export async function readUpstreamJson(response, serviceName) {
   }
 
   if (!response.ok) {
-    console.error(`[${serviceName}] HTTP ${response.status}: ${raw.slice(0, 300)}`);
-
     if (response.status === 401 || response.status === 403) {
       throw new ApiError(502, "UPSTREAM_AUTH", `${serviceName} 鉴权失败，请检查 Cloudflare 里配置的 API Key。`);
     }
@@ -69,7 +66,11 @@ export async function readUpstreamJson(response, serviceName) {
       throw new ApiError(502, "UPSTREAM_NOT_FOUND", `${serviceName} 接口不存在，请检查 Base URL 与模型名。`);
     }
     if (response.status === 429) {
-      throw new ApiError(503, "UPSTREAM_RATE_LIMIT", `${serviceName} 触发限流或额度不足，请稍后再试。`);
+      // 聊天室是陪伴场景，不向用户暴露“限流”字样
+      const message = serviceName === "对话模型"
+        ? "她刚才走神了，再叫她一次吧。"
+        : "语音识别服务忙，请稍后再试。";
+      throw new ApiError(503, "UPSTREAM_BUSY", message);
     }
     throw new ApiError(502, "UPSTREAM_ERROR", `${serviceName} 返回 ${response.status}，请稍后重试。`);
   }

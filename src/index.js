@@ -1,10 +1,11 @@
 /**
  * Cloudflare Worker 入口。
  *
- * 一个 Worker 同时承担两件事：
- *   1. /api/chat  纯文本聊天（调用对话模型）
- *   2. /api/asr   音频转文字（调用语音识别模型）
- *   3. 其余请求交给静态资源（Cloudflare Workers Static Assets，目录 public/）
+ * 一个 Worker 同时承担三件事：
+ *   1. /api/chat  纯文本聊天（智谱主力 + 硅基流动备胎）
+ *   2. /api/asr   音频转文字（Cloudflare Workers AI Whisper）
+ *   3. /api/tts   文本转语音（Microsoft Edge TTS）
+ *   4. 其余请求交给静态资源（Cloudflare Workers Static Assets，目录 public/）
  *
  * 不依赖任何本地服务、数据库或 KV；会话上下文由浏览器 localStorage 保存，
  * 每次请求随 body 带上来。整个应用只需要一个 Worker + 一个公开网址。
@@ -12,6 +13,7 @@
 
 import { handleAsr } from "./asr.js";
 import { handleChat } from "./chat.js";
+import { handleTts } from "./tts.js";
 import { ApiError } from "./utils.js";
 
 const MAX_JSON_BYTES = 64 * 1024;
@@ -88,13 +90,52 @@ function methodNotAllowed(allow, corsHeaders) {
   );
 }
 
+function isMobileRequest(request) {
+  const ua = request.headers.get("user-agent") || "";
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+}
+
+function getClientIp(request) {
+  const forwarded = request.headers.get("x-forwarded-for") || "";
+  return (request.headers.get("cf-connecting-ip") || forwarded.split(",")[0] || "").trim() || "unknown";
+}
+
+/** 手机端返回不可安装的 manifest：display=browser 不满足 PWA 安装条件。 */
+function mobileManifestResponse() {
+  return new Response(JSON.stringify({
+    name: "Pink Room 专属陪伴",
+    short_name: "Pink Room",
+    description: "一个会主动开口的 AI 陪聊室，两个人格、同一屋檐、语音往返。",
+    lang: "zh-CN",
+    id: "/",
+    start_url: "/",
+    scope: "/",
+    display: "browser",
+    background_color: "#1a1013",
+    theme_color: "#1a1013",
+    categories: ["entertainment", "social"],
+    icons: [],
+    prefer_related_applications: false,
+  }), {
+    headers: {
+      "content-type": "application/manifest+json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
 export default {
   /**
    * @param {Request} request
-   * @param {{ASSETS?:{fetch:Function}, LLM_API_KEY?:string, ZHIPU_API_KEY?:string, ASR_API_KEY?:string, SILICONFLOW_API_KEY?:string, LLM_BASE_URL?:string, LLM_MODEL?:string, ASR_BASE_URL?:string, ASR_MODEL?:string, ALLOWED_ORIGIN?:string}} env
+   * @param {{ASSETS?:{fetch:Function}, AI?:object, ZHIPU_API_KEY?:string, SILICONFLOW_API_KEY?:string, LLM_PRIMARY_API_KEY?:string, LLM_FALLBACK_API_KEY?:string, LLM_PRIMARY_BASE_URL?:string, LLM_PRIMARY_MODEL?:string, LLM_FALLBACK_BASE_URL?:string, LLM_FALLBACK_MODEL?:string, ALLOWED_ORIGIN?:string}} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // 手机端不提供可安装的 manifest；桌面端仍使用 public/manifest.webmanifest
+    if (url.pathname === "/manifest.webmanifest" && isMobileRequest(request)) {
+      return mobileManifestResponse();
+    }
 
     // 静态页面、CSS、JS 全部走 Assets；/api/* 由下面的逻辑接管
     if (!url.pathname.startsWith("/api/")) {
@@ -120,10 +161,16 @@ export default {
             ok: true,
             service: "pink-room",
             time: new Date().toISOString(),
-            llmConfigured: Boolean(env.LLM_API_KEY || env.ZHIPU_API_KEY),
-            asrConfigured: Boolean(env.ASR_API_KEY || env.SILICONFLOW_API_KEY),
-            llmModel: env.LLM_MODEL || "agnes-3.0-flash",
-            asrModel: env.ASR_MODEL || "FunAudioLLM/SenseVoiceSmall",
+            llmPrimaryConfigured: Boolean(env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY),
+            llmFallbackConfigured: Boolean(env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY),
+            asrConfigured: Boolean(env.AI),
+            ttsConfigured: true,
+            llmPrimaryBaseUrl: env.LLM_PRIMARY_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
+            llmPrimaryModel: env.LLM_PRIMARY_MODEL || "glm-4-flash",
+            llmFallbackBaseUrl: env.LLM_FALLBACK_BASE_URL || "https://api.siliconflow.cn/v1",
+            llmFallbackModel: env.LLM_FALLBACK_MODEL || "Qwen/Qwen2.5-7B-Instruct",
+            asrModel: "@cf/openai/whisper-large-v3-turbo",
+            ttsProvider: "edge",
           },
           200,
           corsHeaders,
@@ -134,7 +181,7 @@ export default {
         if (request.method !== "POST") return methodNotAllowed("POST, OPTIONS", corsHeaders);
 
         const payload = await readJsonBody(request);
-        const reply = await handleChat(payload, env);
+        const reply = await handleChat(payload, env, getClientIp(request));
         return jsonResponse({ ok: true, reply }, 200, corsHeaders);
       }
 
@@ -143,6 +190,22 @@ export default {
 
         const result = await handleAsr(request, env);
         return jsonResponse({ ok: true, text: result.text }, 200, corsHeaders);
+      }
+
+      if (url.pathname === "/api/tts") {
+        if (request.method !== "POST") return methodNotAllowed("POST, OPTIONS", corsHeaders);
+
+        const payload = await readJsonBody(request);
+        const result = await handleTts(payload, env);
+        return new Response(result.audio, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "content-type": result.contentType,
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          },
+        });
       }
 
       throw new ApiError(404, "NOT_FOUND", "接口不存在。");
@@ -155,7 +218,8 @@ export default {
         );
       }
 
-      console.error("[worker] unhandled error:", err && (err.stack || err.message || err));
+      const detail = String(err && (err.stack || err.message || err) || "unknown").replace(/\s+/g, " ").slice(0, 300);
+      console.error(`AI 报错：服务/${detail}`);
       return jsonResponse(
         { ok: false, error: { code: "INTERNAL", message: "服务内部错误，请稍后重试。" } },
         500,

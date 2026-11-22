@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pink-room-v1';
+const CACHE_NAME = 'pink-room-v4';
 
 const PRECACHE = [
   '/',

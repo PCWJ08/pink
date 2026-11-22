@@ -9,15 +9,20 @@
     "directory": "./public",
     "binding": "ASSETS",
     // /api/* 优先交给 Worker，其余路径交给静态资源，避免路由歧义
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/manifest.webmanifest"]
+  },
+
+  // 语音识别使用 Workers AI 的免费 Neuron 额度
+  "ai": {
+    "binding": "AI"
   },
 
   // 非敏感配置放这里；密钥由 Cloudflare 的 Secrets 注入
   "vars": {
-    "LLM_BASE_URL": "https://apihub.agnes-ai.com/v1",
-    "LLM_MODEL": "agnes-3.0-flash",
-    "ASR_BASE_URL": "https://api.siliconflow.cn/v1",
-    "ASR_MODEL": "FunAudioLLM/SenseVoiceSmall",
+    "LLM_PRIMARY_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+    "LLM_PRIMARY_MODEL": "glm-4-flash",
+    "LLM_FALLBACK_BASE_URL": "https://api.siliconflow.cn/v1",
+    "LLM_FALLBACK_MODEL": "Qwen/Qwen2.5-7B-Instruct",
     "ALLOWED_ORIGIN": "https://ai.weidenglu.com"
   },
 

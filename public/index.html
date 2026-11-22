@@ -5,14 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#1a1013">
     <meta name="description" content="一个会主动开口的 AI 陪聊室，两个人格、同一屋檐、语音往返。">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Pink Room">
     <title>专属陪伴</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
     <link rel="stylesheet" href="/theme.css">
 </head>
 <body>
@@ -47,7 +42,7 @@
             <button type="button" id="voice-btn" class="voice-btn" aria-label="按住说话">按住说话</button>
             <!-- 输入框包裹层放到右边 -->
             <div class="input-wrapper">
-                <input type="text" id="chat-input" class="chat-input" placeholder="发消息..." maxlength="200" autocomplete="off">
+                <input type="text" id="chat-input" class="chat-input" placeholder="发消息..." maxlength="60" autocomplete="off">
                 <button type="button" id="send-btn" class="send-btn">发送</button>
             </div>
         </div>

@@ -1,47 +1,64 @@
 /**
  * 音频转文字接口。
  *
- * 浏览器把录音直接以二进制 POST 过来（不套 base64，省 1/3 体积），
- * Worker 再以 multipart/form-data 转发给硅基流动的 OpenAI 兼容转写接口。
+ * 前端把 MediaRecorder 的 webm/mp4 在浏览器里解码，重采样成 16kHz 单声道 WAV，
+ * 再以二进制 POST 到 /api/asr。Worker 把 WAV 转成 base64，交给 Workers AI 的
+ * Whisper large-v3-turbo 识别。
  *
- * 注意：Workers 不能给 FormData 手动设置 Content-Type，
- * 必须让运行时自动补 boundary。
+ * 为什么不用硅基流动：免费额度有限流，且 webm 直传在 Whisper turbo 上不稳定。
+ * Workers AI 的免费额度按 Neuron 计算，Whisper turbo 约 46.63 Neuron/音频分钟；
+ * 每天 10,000 Neuron（UTC 0 点重置）约等于 214 分钟音频，日常短语音足够。
  */
 
-import { ApiError, fetchUpstream, joinUrl, readUpstreamJson } from "./utils.js";
+import { ApiError } from "./utils.js";
 
-const UPSTREAM_TIMEOUT_MS = 25000;
-const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB，足够几分钟的语音
+const MODEL = "@cf/openai/whisper-large-v3-turbo";
+const TIMEOUT_MS = 25000;
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 
-const EXT_BY_MIME = {
-  "audio/wav": "wav",
-  "audio/x-wav": "wav",
-  "audio/wave": "wav",
-  "audio/vnd.wave": "wav",
-  "audio/webm": "webm",
-  "audio/ogg": "ogg",
-  "audio/opus": "opus",
-  "audio/mp4": "mp4",
-  "audio/m4a": "m4a",
-  "audio/x-m4a": "m4a",
-  "audio/mpeg": "mp3",
-  "audio/mp3": "mp3",
-};
+const WAV_TYPES = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/vnd.wave",
+]);
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+
+  return btoa(binary);
+}
+
+function withTimeout(promise, ms) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new ApiError(504, "ASR_TIMEOUT", "语音识别超时，请再说一次。"));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 /**
- * @param {Request} request 请求体是音频二进制
+ * @param {Request} request 请求体是 16kHz 单声道 WAV 二进制
  * @param {object} env
  * @returns {Promise<{text:string}>}
  */
 export async function handleAsr(request, env) {
-  const apiKey = env.ASR_API_KEY || env.SILICONFLOW_API_KEY;
-  if (!apiKey) {
-    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置 ASR_API_KEY，语音输入暂时不可用。");
+  if (!env || !env.AI) {
+    console.error("AI 报错：识别/未绑定 Workers AI");
+    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有启用 Workers AI，语音输入暂时不可用。");
   }
 
   const contentType = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-  if (!contentType.startsWith("audio/")) {
-    throw new ApiError(415, "UNSUPPORTED_AUDIO", "请以 audio/* 的 Content-Type 上传录音。");
+  if (!WAV_TYPES.has(contentType)) {
+    throw new ApiError(415, "UNSUPPORTED_AUDIO", "请上传 WAV 格式的录音。");
   }
 
   const declaredLength = Number(request.headers.get("content-length") || 0);
@@ -57,30 +74,26 @@ export async function handleAsr(request, env) {
     throw new ApiError(413, "AUDIO_TOO_LARGE", "录音太长了，请控制在 10MB 以内。");
   }
 
-  const ext = (request.headers.get("x-audio-ext") || "").trim().toLowerCase() || EXT_BY_MIME[contentType];
-  if (!ext || !/^[a-z0-9]{2,5}$/.test(ext)) {
-    throw new ApiError(415, "UNSUPPORTED_AUDIO", `暂不支持 ${contentType} 格式的录音。`);
+  const audioBase64 = bytesToBase64(new Uint8Array(audio));
+
+  let result;
+  try {
+    result = await withTimeout(
+      env.AI.run(MODEL, {
+        audio: audioBase64,
+        task: "transcribe",
+        vad_filter: true,
+        condition_on_previous_text: false,
+      }),
+      TIMEOUT_MS,
+    );
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+
+    console.error(`AI 报错：识别/${err && (err.message || err)}`);
+    throw new ApiError(502, "ASR_FAILED", "没听清，再说一次吧。");
   }
 
-  const baseUrl = env.ASR_BASE_URL || "https://api.siliconflow.cn/v1";
-  const model = env.ASR_MODEL || "FunAudioLLM/SenseVoiceSmall";
-
-  const form = new FormData();
-  form.append("model", model);
-  form.append("file", new Blob([audio], { type: contentType }), `audio.${ext}`);
-
-  const response = await fetchUpstream(
-    joinUrl(baseUrl, "/audio/transcriptions"),
-    {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}` },
-      body: form,
-    },
-    UPSTREAM_TIMEOUT_MS,
-  );
-
-  const data = await readUpstreamJson(response, "语音识别");
-  const text = String(data?.text ?? "").replace(/\s+/g, " ").trim();
-
+  const text = String(result?.text ?? "").replace(/\s+/g, " ").trim();
   return { text };
 }

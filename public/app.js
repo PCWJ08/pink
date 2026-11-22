@@ -2,10 +2,10 @@
 
 /* ============================================================
    Pink Room 前端交互
-   - 文本与语音都通过 fetch 调用 Worker 接口
-   - 回复语音使用浏览器 speechSynthesis
+   - 文本、语音识别、语音合成都通过 fetch 调用 Worker 接口
+   - AI 语音由 /api/tts 生成神经网络 mp3，不再使用浏览器 speechSynthesis
    - 聊天记录保存在 localStorage，请求时附带最近几条作为上下文
-   - 录音在浏览器内转为 16kHz 单声道 WAV，兼容移动端
+   - 录音保留原始文件用于回放，另转 16kHz WAV 用于 Whisper 识别
    ============================================================ */
 
 /* ---------------- 1. 元素与状态 ---------------- */
@@ -23,14 +23,19 @@ const voiceBtn = document.getElementById('voice-btn');
 const toastEl = document.getElementById('toast');
 const installBtn = document.getElementById('install-btn');
 
-const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
-
 const STORAGE_PREFIX = 'pink_room_history_';
-const MAX_LOCAL_HISTORY = 30;
-const MAX_API_HISTORY = 12;
-const IDLE_DELAY_MS = 15000;
-const IDLE_MAX_LOOPS = 2;
-const INTERJECT_DELAY_MS = 1400;
+const MAX_LOCAL_HISTORY = 20;
+const MAX_API_HISTORY = 20;
+const IDLE_DELAY_MS = 5000;
+const INTERJECT_DELAY_MS = 1500;
+
+// 旧记录里 tts.voice 是 female / male，迁移时按角色名回到原来的神经音色。
+const VOICE_PRESETS = {
+  '御姐': { voice: 'zh-TW-HsiaoChenNeural', rate: '+33%', pitch: '+15Hz', volume: '+4%' },
+  '甜妹': { voice: 'zh-CN-XiaoyiNeural', rate: '+13%', pitch: '+14Hz', volume: '+5%' },
+  '暖男': { voice: 'zh-CN-YunxiNeural', rate: '+3%', pitch: '-4Hz', volume: '+5%' },
+  '霸总': { voice: 'zh-TW-YunJheNeural', rate: '+17%', pitch: '-10Hz', volume: '+9%' },
+};
 
 let myGender = 'male';
 
@@ -40,20 +45,17 @@ const state = {
   history: [],
   busy: false,
   token: 0,
+  queue: [],
+  queueRunning: false,
   idleTimer: null,
-  idleLoops: 0,
 };
 
 let typingEl = null;
 let currentAudio = null;
-let speechPrimed = false;
+let audioGeneration = 0;
 let toastTimer = null;
 
 /* ---------------- 2. 通用工具 ---------------- */
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function scrollToBottom() {
   window.requestAnimationFrame(() => {
@@ -73,25 +75,63 @@ function historyKey() {
   return `${STORAGE_PREFIX}${state.gender}_${state.name}`;
 }
 
-/** 兼容旧版 localStorage（旧数据里带有 base64 音频，这里只取文字，避免撑爆配额）。 */
+/** 兼容旧版本地记录：用户语音保留原始录音，AI 语音保留文字与朗读参数。 */
 function normalizeHistoryItem(item) {
   if (!item || typeof item !== 'object') return null;
 
   const text = String(item.text || '').trim();
-  if (!text) return null;
 
   let role = item.role === 'ai' || item.role === 'user' ? item.role : null;
   if (!role && item.sender) role = item.sender === state.name ? 'user' : 'ai';
   if (!role) return null;
 
+  const audio = typeof item.audio === 'string' && item.audio.startsWith('data:audio/')
+    ? item.audio
+    : '';
+
+  if (!text && !audio) return null;
+
   const name = role === 'user' ? state.name : String(item.name || item.sender || 'AI');
-  return { role, name, text };
+  const normalized = { role, name, text };
+
+  if (audio) {
+    normalized.audio = audio;
+    if (role === 'user') {
+      normalized.duration = Math.max(1, Math.min(10, Number(item.duration) || 2));
+    }
+  }
+
+  // 新的记录带神经音色参数，刷新后 AI 消息仍以语音气泡显示
+  if (role === 'ai' && item.tts && typeof item.tts === 'object') {
+    const preset = VOICE_PRESETS[name] || VOICE_PRESETS['御姐'];
+    const voice = typeof item.tts.voice === 'string' && /Neural$/.test(item.tts.voice)
+      ? item.tts.voice
+      : preset.voice;
+    const rate = /^[+-]?\d{1,3}%$/.test(String(item.tts.rate || ''))
+      ? String(item.tts.rate)
+      : preset.rate;
+    const pitch = /^[+-]?\d{1,3}Hz$/.test(String(item.tts.pitch || ''))
+      ? String(item.tts.pitch)
+      : preset.pitch;
+    const volume = /^[+-]?\d{1,3}%$/.test(String(item.tts.volume || ''))
+      ? String(item.tts.volume)
+      : preset.volume;
+
+    normalized.tts = { voice, rate, pitch, volume };
+  }
+
+  return normalized;
 }
 
 function loadHistory() {
   try {
-    const raw = JSON.parse(localStorage.getItem(historyKey()) || '[]');
+    // 兼容旧键名 history_{gender}_{name}，让同名同性别继续读到原来的记录
+    const current = localStorage.getItem(historyKey());
+    const legacy = localStorage.getItem(`history_${state.gender}_${state.name}`);
+    const raw = JSON.parse(current || legacy || '[]');
+
     if (!Array.isArray(raw)) return [];
+
     return raw
       .map((item) => normalizeHistoryItem(item))
       .filter(Boolean)
@@ -102,15 +142,52 @@ function loadHistory() {
 }
 
 function saveHistory() {
+  const key = historyKey();
+  const items = state.history.slice(-MAX_LOCAL_HISTORY).map((item) => ({ ...item }));
+
   try {
-    localStorage.setItem(historyKey(), JSON.stringify(state.history.slice(-MAX_LOCAL_HISTORY)));
+    localStorage.setItem(key, JSON.stringify(items));
+    return;
   } catch {
-    // localStorage 满了也不影响本轮的聊天
+    // 配额不足时从最旧的语音开始释放，优先保留文字
+  }
+
+  for (let i = 0; i < items.length; i += 1) {
+    if (!items[i].audio) continue;
+
+    delete items[i].audio;
+
+    try {
+      localStorage.setItem(key, JSON.stringify(items));
+      return;
+    } catch {
+      // 继续释放下一条语音
+    }
+  }
+
+  try {
+    localStorage.setItem(
+      key,
+      JSON.stringify(items.map(({ audio, ...rest }) => rest)),
+    );
+  } catch {
+    // 仍然放不下就放弃本轮缓存，不影响当前聊天
   }
 }
 
-function addHistory(role, name, text) {
-  state.history.push({ role, name, text });
+function addHistory(role, name, text, extra) {
+  const item = { role, name, text };
+
+  if (role === 'ai' && extra && extra.rate) {
+    item.tts = extra;
+  }
+
+  if (role === 'user' && extra && extra.audio) {
+    item.audio = extra.audio;
+    item.duration = extra.duration || 2;
+  }
+
+  state.history.push(item);
   state.history = state.history.slice(-MAX_LOCAL_HISTORY);
   saveHistory();
 }
@@ -131,8 +208,11 @@ async function requestJson(path, { method = 'GET', headers = {}, body, timeout =
       signal: controller.signal,
     });
   } catch (err) {
-    if (err && err.name === 'AbortError') throw new Error('请求超时，请检查网络后重试。');
-    throw new Error('网络连接失败，请稍后重试。');
+    const error = new Error(err && err.name === 'AbortError'
+      ? '请求超时，请检查网络后重试。'
+      : '网络连接失败，请稍后重试。');
+    error.code = err && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -145,16 +225,33 @@ async function requestJson(path, { method = 'GET', headers = {}, body, timeout =
   }
 
   if (!response.ok || !data || data.ok === false) {
-    throw new Error(data && data.error && data.error.message
+    const error = new Error(data && data.error && data.error.message
       ? data.error.message
       : `请求失败（HTTP ${response.status}）`);
+
+    error.code = data && data.error && data.error.code
+      ? data.error.code
+      : 'REQUEST_FAILED';
+    error.status = response.status;
+    throw error;
   }
   return data;
+}
+
+/** 聊天室的错误提示：限流/空回复用轻提示，配置错误才显示系统消息。 */
+function showChatError(err) {
+  if (err && (err.code === 'UPSTREAM_BUSY' || err.code === 'EMPTY_REPLY')) {
+    showToast('她刚才走神了，再叫她一次吧。');
+    return;
+  }
+
+  appendSystemMessage(err && err.message ? err.message : '网络开小差了，再试一次吧。');
 }
 
 function requestReply(options = {}) {
   const payload = {
     mode: options.mode || 'chat',
+    source: options.source || 'text',
     gender: state.gender,
     username: state.name,
     hour: new Date().getHours(),
@@ -176,45 +273,7 @@ function requestReply(options = {}) {
   });
 }
 
-/* ---------------- 4. 浏览器语音合成（代替 Edge-TTS） ---------------- */
-
-const speechState = { queue: [], speaking: false, generation: 0 };
-
-/** 在用户手势里先播放一个静音片段，绕过移动端「首次朗读需要交互」的限制。 */
-function primeSpeech() {
-  if (speechPrimed || !synth) return;
-  try {
-    const utterance = new SpeechSynthesisUtterance(' ');
-    utterance.volume = 0;
-    utterance.rate = 2;
-    synth.speak(utterance);
-    speechPrimed = true;
-  } catch {
-    // 不支持就只显示文字
-  }
-}
-
-function pickVoice(voiceGender) {
-  if (!synth) return null;
-
-  let voices = [];
-  try {
-    voices = synth.getVoices() || [];
-  } catch {
-    return null;
-  }
-  if (!voices.length) return null;
-
-  const chinese = voices.filter(
-    (voice) => /^zh([-_]|$)/i.test(voice.lang) || /chinese|中文|普通话|國語/i.test(voice.name),
-  );
-  const pool = chinese.length ? chinese : voices;
-  const female = /xiaoxiao|xiaoyi|huihui|yaoyao|ting[- ]?ting|meijia|sinji|female|女/i;
-  const male = /yunxi|yunjian|yunyang|kangkang|liang|male|男/i;
-  const pattern = voiceGender === 'male' ? male : female;
-
-  return pool.find((voice) => pattern.test(voice.name)) || pool[0] || null;
-}
+/* ---------------- 4. 神经语音播放（Worker /api/tts） ---------------- */
 
 function pauseLocalAudio() {
   if (!currentAudio) return;
@@ -226,68 +285,158 @@ function pauseLocalAudio() {
   }
 }
 
-function pumpSpeech() {
-  if (!synth || speechState.speaking || speechState.queue.length === 0) return;
-
-  const generation = speechState.generation;
-  const item = speechState.queue.shift();
-  const tts = item.tts || {};
-
-  const utterance = new SpeechSynthesisUtterance(item.text);
-  utterance.lang = 'zh-CN';
-  utterance.rate = clamp(Number(tts.rate) || 1, 0.5, 2);
-  utterance.pitch = clamp(Number(tts.pitch) || 1, 0, 2);
-  utterance.volume = 1;
-
-  const voice = pickVoice(tts.voice);
-  if (voice) utterance.voice = voice;
-
-  speechState.speaking = true;
+function stopAudio() {
   pauseLocalAudio();
+  currentAudio = null;
+}
 
-  const finish = () => {
-    if (generation !== speechState.generation) return;
-    speechState.speaking = false;
-    window.setTimeout(() => {
-      if (generation === speechState.generation) pumpSpeech();
-    }, 120);
+let silentAudioUrl = '';
+
+/** 生成一段很短的静音 WAV，用于在用户点击的同一个手势里解锁移动端音频。 */
+function getSilentAudioUrl() {
+  if (silentAudioUrl) return silentAudioUrl;
+
+  const length = 800;
+  const silentBuffer = {
+    numberOfChannels: 1,
+    length,
+    getChannelData: () => new Float32Array(length),
   };
 
-  utterance.onend = finish;
-  utterance.onerror = finish;
+  silentAudioUrl = URL.createObjectURL(encodeWav(silentBuffer));
+  return silentAudioUrl;
+}
+
+function playAudioBlob(blob, bubble, dot, audio) {
+  const generation = ++audioGeneration;
+  stopAudio();
+
+  const url = URL.createObjectURL(blob);
+  const player = audio || new Audio();
+  currentAudio = player;
+
+  const finish = () => {
+    if (generation === audioGeneration) {
+      bubble.classList.remove('playing');
+      currentAudio = null;
+    }
+    URL.revokeObjectURL(url);
+  };
+
+  bubble.classList.add('playing');
+  if (dot) dot.classList.remove('active');
+
+  player.addEventListener('ended', finish, { once: true });
+  player.addEventListener('error', () => {
+    finish();
+    showToast('语音播放失败，先看文字吧。');
+  }, { once: true });
 
   try {
-    synth.speak(utterance);
+    player.pause();
+    player.volume = 1;
+    player.src = url;
+    player.load();
+    player.play().catch(() => {
+      finish();
+      showToast('点击后仍未能播放，请检查浏览器是否静音。');
+    });
   } catch {
     finish();
+    showToast('语音播放失败，先看文字吧。');
   }
 }
 
-function speak(text, tts) {
-  if (!synth || !text) return;
-  speechState.queue.push({ text, tts });
-  pumpSpeech();
-}
+async function requestAudio(payload) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 30000);
 
-function stopSpeech() {
-  if (!synth) return;
-  speechState.generation += 1;
-  speechState.queue = [];
-  speechState.speaking = false;
+  let response;
   try {
-    synth.cancel();
-  } catch {
-    // ignore
+    response = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } catch (err) {
+    const error = new Error(err && err.name === 'AbortError'
+      ? '语音生成超时，请再点一次。'
+      : '网络连接失败，请稍后重试。');
+    error.code = err && err.name === 'AbortError' ? 'TTS_TIMEOUT' : 'NETWORK_ERROR';
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
+
+  if (!response.ok) {
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    const error = new Error(data && data.error && data.error.message
+      ? data.error.message
+      : `语音生成失败（HTTP ${response.status}）`);
+    error.code = data && data.error && data.error.code
+      ? data.error.code
+      : 'TTS_FAILED';
+    error.status = response.status;
+    throw error;
+  }
+
+  const type = response.headers.get('content-type') || '';
+  if (!type.startsWith('audio/')) {
+    throw new Error('语音服务没有返回音频。');
+  }
+
+  return response.blob();
 }
 
-function replaySpeech(text, tts) {
-  if (!synth) {
-    showToast('当前浏览器不支持语音朗读，文字仍可阅读。');
-    return;
+async function playAiVoice({ text, tts, bubble, dot }) {
+  if (!text) return;
+
+  const generation = ++audioGeneration;
+  bubble.classList.add('playing');
+  if (dot) dot.classList.remove('active');
+
+  // 在点击的同一个任务里播放静音片段，解锁 iOS/Android 的音频播放权限。
+  const player = new Audio(getSilentAudioUrl());
+  player.volume = 0;
+  currentAudio = player;
+  player.play().catch(() => {});
+
+  try {
+    const blob = await requestAudio({
+      text,
+      voice: tts && tts.voice,
+      rate: tts && tts.rate,
+      pitch: tts && tts.pitch,
+      volume: tts && tts.volume,
+    });
+
+    if (generation !== audioGeneration) {
+      player.pause();
+      return;
+    }
+
+    playAudioBlob(blob, bubble, dot, player);
+  } catch (err) {
+    if (generation !== audioGeneration) return;
+
+    player.pause();
+    bubble.classList.remove('playing');
+    console.error(`AI 报错：TTS/${err && err.message}`);
+
+    if (err && err.code === 'TTS_NOT_CONFIGURED') {
+      showToast('语音服务还没配置，先点「转文字」看内容吧。');
+    } else {
+      showToast('语音暂时不可用，先点「转文字」看内容吧。');
+    }
   }
-  stopSpeech();
-  speak(text, tts);
 }
 
 /* ---------------- 5. 消息渲染 ---------------- */
@@ -337,7 +486,7 @@ function appendSystemMessage(text) {
   scrollToBottom();
 }
 
-function appendAiVoiceBubble(sender, text, tts) {
+function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
   const duration = Math.max(2, Math.round(text.length / 3));
   const msgDiv = document.createElement('div');
   msgDiv.className = 'msg ai';
@@ -363,17 +512,35 @@ function appendAiVoiceBubble(sender, text, tts) {
   durationEl.textContent = `${duration}"`;
 
   const dot = document.createElement('div');
-  dot.className = 'red-dot active';
+  dot.className = unread ? 'red-dot active' : 'red-dot';
 
   bubble.append(wave, durationEl, dot);
 
-  let playTimer = null;
   const play = () => {
     dot.classList.remove('active');
-    bubble.classList.add('playing');
-    clearTimeout(playTimer);
-    playTimer = window.setTimeout(() => bubble.classList.remove('playing'), Math.max(1500, duration * 1000));
-    replaySpeech(text, tts);
+
+    if (audioUrl) {
+      const generation = ++audioGeneration;
+      stopAudio();
+      bubble.classList.add('playing');
+      const audio = new Audio(audioUrl);
+      currentAudio = audio;
+      const finish = () => {
+        if (generation === audioGeneration) {
+          bubble.classList.remove('playing');
+          currentAudio = null;
+        }
+      };
+      audio.addEventListener('ended', finish, { once: true });
+      audio.addEventListener('error', finish, { once: true });
+      audio.play().catch(() => {
+        finish();
+        showToast('语音播放失败。');
+      });
+      return;
+    }
+
+    playAiVoice({ text, tts, bubble, dot });
   };
 
   bubble.addEventListener('click', play);
@@ -386,13 +553,13 @@ function appendAiVoiceBubble(sender, text, tts) {
 
   rowDiv.appendChild(bubble);
 
-  // 字幕默认展开，语音被浏览器拦截时也能读
+  // 字幕默认收起，点「转文字」再展开
   const transBtn = document.createElement('div');
   transBtn.className = 'trans-btn';
-  transBtn.textContent = '收起';
+  transBtn.textContent = '转文字';
 
   const transText = document.createElement('div');
-  transText.className = 'trans-text show';
+  transText.className = 'trans-text';
   transText.textContent = text;
 
   transBtn.addEventListener('click', () => {
@@ -434,8 +601,7 @@ function appendUserVoiceBubble(duration, objectUrl) {
 
   bubble.addEventListener('click', () => {
     if (!objectUrl) return;
-    stopSpeech();
-    pauseLocalAudio();
+    stopAudio();
     currentAudio = new Audio(objectUrl);
     currentAudio.play().catch(() => showToast('录音回放失败。'));
   });
@@ -446,31 +612,30 @@ function appendUserVoiceBubble(duration, objectUrl) {
     }
   });
 
-  const transText = document.createElement('div');
-  transText.className = 'trans-text';
-
   rowDiv.appendChild(bubble);
-  msgDiv.append(nameDiv, rowDiv, transText);
+  msgDiv.append(nameDiv, rowDiv);
   messagesArea.appendChild(msgDiv);
   scrollToBottom();
-
-  return {
-    setText(text) {
-      transText.textContent = text;
-      transText.classList.add('show');
-      scrollToBottom();
-    },
-    setFailure(text) {
-      transText.textContent = text;
-      transText.classList.add('show');
-      scrollToBottom();
-    },
-  };
 }
 
 function renderHistory() {
   state.history.forEach((item) => {
-    appendTextMessage(item.text, item.role === 'user' ? 'user' : 'ai', item.name);
+    if (item.role === 'ai' && item.audio) {
+      appendAiVoiceBubble(item.name, item.text, item.tts, false, item.audio);
+      return;
+    }
+
+    if (item.role === 'ai' && item.tts) {
+      appendAiVoiceBubble(item.name, item.text, item.tts, false);
+      return;
+    }
+
+    if (item.role === 'user' && item.audio) {
+      appendUserVoiceBubble(item.duration || 2, item.audio);
+      return;
+    }
+
+    appendTextMessage(item.text, item.role === 'user' ? 'user' : 'ai', item.role === 'user' ? item.name : 'AI');
   });
   saveHistory();
 }
@@ -479,101 +644,114 @@ function renderHistory() {
 
 function setBusy(busy) {
   state.busy = busy;
-  sendBtn.disabled = busy;
-  voiceBtn.disabled = busy;
-  chatInput.placeholder = busy ? '对方正在回复...' : '发消息...';
-  if (!busy) {
-    sendBtn.style.display = chatInput.value.trim() ? 'block' : 'none';
-  }
 }
 
 function deliverReply(reply) {
   if (!reply || !reply.text) return;
   appendAiVoiceBubble(reply.sender, reply.text, reply.tts);
-  addHistory('ai', reply.sender, reply.text);
-  speak(reply.text, reply.tts);
+  addHistory('ai', reply.sender, reply.text, reply.tts);
 }
 
-async function runChatTurn(text) {
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function enqueueTurn(text, source = 'text', audio = '', duration = 0) {
+  state.queue.push({ text, source, audio, duration });
+  runQueue();
+}
+
+async function runQueue() {
+  if (state.queueRunning) return;
+
+  state.queueRunning = true;
+
+  try {
+    while (state.queue.length) {
+      const turn = state.queue.shift();
+      await runChatTurn(turn);
+    }
+  } finally {
+    state.queueRunning = false;
+
+    if (state.queue.length) {
+      runQueue();
+    } else if (state.name) {
+      resetIdleTimer();
+    }
+  }
+}
+
+async function runChatTurn(turn) {
+  const { text, source, audio, duration } = turn;
+  addHistory('user', state.name, text, source === 'voice' && audio ? { audio, duration } : undefined);
+
   const token = ++state.token;
   setBusy(true);
   showTyping(true);
 
   try {
-    const data = await requestReply({ mode: 'chat', text });
+    const data = await requestReply({ mode: 'chat', text, source });
     if (token !== state.token) return;
 
     showTyping(false);
     deliverReply(data.reply);
-    state.idleLoops = 0;
-    resetIdleTimer();
-    scheduleInterject(text, data.reply, token);
+
+    // 原版节奏：A 说完后等 1.5 秒，B 再补一句，然后才处理下一条用户消息
+    await wait(INTERJECT_DELAY_MS);
+    if (token !== state.token) return;
+
+    try {
+      const interject = await requestReply({
+        mode: 'interject',
+        text,
+        previous: data.reply.text,
+        previousSpeaker: data.reply.sender,
+      });
+
+      if (token === state.token) deliverReply(interject.reply);
+    } catch {
+      // 插话失败不打扰用户，主回复已经完整展示
+    }
   } catch (err) {
     if (token === state.token) {
       showTyping(false);
-      appendSystemMessage(err.message);
+      showChatError(err);
     }
   } finally {
     if (token === state.token) setBusy(false);
   }
 }
 
-/** 角色 A 说完 1.4 秒后，让房间里的另一个角色插一句话。 */
-function scheduleInterject(userText, mainReply, token) {
-  if (!mainReply || !mainReply.text) return;
-
-  window.setTimeout(async () => {
-    if (token !== state.token || state.busy) return;
-
-    try {
-      const data = await requestReply({
-        mode: 'interject',
-        text: userText,
-        previous: mainReply.text,
-        previousSpeaker: mainReply.sender,
-      });
-      if (token !== state.token) return;
-
-      deliverReply(data.reply);
-      resetIdleTimer();
-    } catch {
-      // 插话失败不打扰用户，主回复已经完整展示
-    }
-  }, INTERJECT_DELAY_MS);
-}
-
 function sendTextMessage() {
   const text = chatInput.value.trim();
-  if (!text || state.busy) return;
+  if (!text) return;
 
-  primeSpeech();
-  state.idleLoops = 0;
   appendTextMessage(text, 'user', state.name);
-  addHistory('user', state.name, text);
 
   chatInput.value = '';
   sendBtn.style.display = 'none';
 
-  runChatTurn(text);
+  enqueueTurn(text, 'text');
 }
-
 /* ---------------- 7. 冷场时角色主动开口 ---------------- */
 
 function resetIdleTimer() {
   clearTimeout(state.idleTimer);
   state.idleTimer = null;
 
-  if (!state.name || state.idleLoops >= IDLE_MAX_LOOPS) return;
+  if (!state.name) return;
 
   state.idleTimer = window.setTimeout(runIdle, IDLE_DELAY_MS);
 }
 
 async function runIdle() {
-  if (!state.name || state.busy || document.visibilityState !== 'visible') {
-    resetIdleTimer();
-    return;
-  }
+  if (!state.name || state.busy || state.queueRunning || state.queue.length) return;
 
+  // 页面不可见时不发起模型请求，等回到前台再继续
+  if (document.visibilityState !== 'visible') return;
+
+  state.queueRunning = true;
   const token = ++state.token;
   setBusy(true);
   showTyping(true);
@@ -584,14 +762,21 @@ async function runIdle() {
 
     showTyping(false);
     deliverReply(data.reply);
-    state.idleLoops += 1;
-  } catch {
-    // 冷场接话失败就安静待着，不弹错误
-    if (token === state.token) showTyping(false);
+  } catch (err) {
+    if (token === state.token) {
+      showTyping(false);
+      console.error(`AI 报错：永动/${err && err.message}`);
+    }
   } finally {
     if (token === state.token) {
       setBusy(false);
-      if (state.idleLoops < IDLE_MAX_LOOPS) resetIdleTimer();
+      state.queueRunning = false;
+
+      if (state.queue.length) {
+        runQueue();
+      } else {
+        resetIdleTimer();
+      }
     }
   }
 }
@@ -599,6 +784,7 @@ async function runIdle() {
 /* ---------------- 8. 进房问候 ---------------- */
 
 async function sendGreeting() {
+  state.queueRunning = true;
   const token = ++state.token;
   setBusy(true);
   showTyping(true);
@@ -609,14 +795,22 @@ async function sendGreeting() {
 
     showTyping(false);
     deliverReply(data.reply);
-    resetIdleTimer();
   } catch (err) {
     if (token === state.token) {
       showTyping(false);
-      appendSystemMessage(err.message);
+      showChatError(err);
     }
   } finally {
-    if (token === state.token) setBusy(false);
+    if (token === state.token) {
+      setBusy(false);
+      state.queueRunning = false;
+
+      if (state.queue.length) {
+        runQueue();
+      } else {
+        resetIdleTimer();
+      }
+    }
   }
 }
 
@@ -631,6 +825,7 @@ let isLongPress = false;
 let isCanceling = false;
 let startY = 0;
 let discardRecording = false;
+let maxDurationTimer = null;
 
 function pickAudioMime() {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
@@ -652,9 +847,14 @@ async function ensureMic() {
     });
 
     const mimeType = pickAudioMime();
-    mediaRecorder = mimeType
-      ? new MediaRecorder(mediaStream, { mimeType })
-      : new MediaRecorder(mediaStream);
+    const options = { audioBitsPerSecond: 64000 };
+    if (mimeType) options.mimeType = mimeType;
+
+    try {
+      mediaRecorder = new MediaRecorder(mediaStream, options);
+    } catch {
+      mediaRecorder = new MediaRecorder(mediaStream);
+    }
 
     mediaRecorder.addEventListener('dataavailable', (event) => {
       if (event.data && event.data.size > 0) audioChunks.push(event.data);
@@ -670,6 +870,9 @@ async function ensureMic() {
 
 /** 释放麦克风；iOS 切后台再回来时，原来的 MediaStream 可能已经失效。 */
 function releaseMic() {
+  clearTimeout(maxDurationTimer);
+  maxDurationTimer = null;
+
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     discardRecording = true;
     try {
@@ -687,7 +890,10 @@ function releaseMic() {
 }
 
 function onRecordingStop() {
-  const duration = Math.max(1, Math.round((Date.now() - pressStartTime) / 1000));
+  clearTimeout(maxDurationTimer);
+  maxDurationTimer = null;
+
+  const duration = Math.max(1, Math.min(10, Math.round((Date.now() - pressStartTime) / 1000)));
   const mimeType = (mediaRecorder && mediaRecorder.mimeType)
     || (audioChunks[0] && audioChunks[0].type)
     || 'audio/webm';
@@ -699,8 +905,8 @@ function onRecordingStop() {
     showToast('已取消录音。');
     return;
   }
-  if (blob.size < 1200 || duration < 1) {
-    showToast('说话时间太短，再按住试一次。');
+  if (!blob.size) {
+    showToast('没有录到声音，再试一次。');
     return;
   }
 
@@ -708,7 +914,6 @@ function onRecordingStop() {
 }
 
 function onVoicePressStart(event) {
-  if (state.busy) return;
   if (event.pointerType === 'mouse' && event.button !== 0) return;
 
   if (!mediaRecorder) {
@@ -717,8 +922,6 @@ function onVoicePressStart(event) {
     });
     return;
   }
-
-  primeSpeech();
 
   startY = event.clientY || 0;
   isCanceling = false;
@@ -741,6 +944,13 @@ function onVoicePressStart(event) {
       showToast('录音启动失败，请重试。');
       return;
     }
+
+    maxDurationTimer = window.setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        showToast('已自动结束录音。');
+        onVoicePressEnd();
+      }
+    }, 10000);
 
     voiceBtn.textContent = '松开结束 (上滑取消)';
     voiceBtn.classList.add('recording');
@@ -772,6 +982,8 @@ function onVoicePressMove(event) {
 
 function onVoicePressEnd(event) {
   clearTimeout(pressTimer);
+  clearTimeout(maxDurationTimer);
+  maxDurationTimer = null;
 
   document.removeEventListener('pointermove', onVoicePressMove);
   document.removeEventListener('pointerup', onVoicePressEnd);
@@ -795,37 +1007,30 @@ function onVoicePressEnd(event) {
   isCanceling = false;
 }
 
-/** 把任意浏览器能解码的录音转成 16kHz 单声道 WAV，最大化 ASR 兼容性。 */
-async function blobToWav(blob) {
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) throw new Error('AudioContext unsupported');
-
-  const arrayBuffer = await blob.arrayBuffer();
-  const context = new AudioContextClass();
-  let audioBuffer;
-
-  try {
-    audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
-  } finally {
-    if (context.close) context.close().catch(() => {});
-  }
-
-  const sampleRate = 16000;
-  const length = Math.max(1, Math.ceil(audioBuffer.duration * sampleRate));
-  const offline = new OfflineAudioContext(1, length, sampleRate);
-  const source = offline.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(offline.destination);
-  source.start(0);
-
-  const rendered = await offline.startRendering();
-  return encodeWav(rendered.getChannelData(0), sampleRate);
+/** 保存原始录音用于历史回放；另外转成 16kHz 单声道 WAV 供 Whisper 使用。 */
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取录音失败'));
+    reader.readAsDataURL(blob);
+  });
 }
 
-function encodeWav(samples, sampleRate) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
+function encodeWav(audioBuffer) {
+  const channels = Math.max(1, audioBuffer.numberOfChannels);
+  const length = audioBuffer.length;
+  const mono = new Float32Array(length);
 
+  for (let channel = 0; channel < channels; channel += 1) {
+    const data = audioBuffer.getChannelData(channel);
+    for (let i = 0; i < length; i += 1) {
+      mono[i] += data[i] / channels;
+    }
+  }
+
+  const buffer = new ArrayBuffer(44 + mono.length * 2);
+  const view = new DataView(buffer);
   const writeString = (offset, value) => {
     for (let i = 0; i < value.length; i += 1) {
       view.setUint8(offset + i, value.charCodeAt(i));
@@ -833,72 +1038,110 @@ function encodeWav(samples, sampleRate) {
   };
 
   writeString(0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * 2, true);
+  view.setUint32(4, 36 + mono.length * 2, true);
   writeString(8, 'WAVE');
   writeString(12, 'fmt ');
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 16000 * 2, true);
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   writeString(36, 'data');
-  view.setUint32(40, samples.length * 2, true);
+  view.setUint32(40, mono.length * 2, true);
 
-  let offset = 44;
-  for (let i = 0; i < samples.length; i += 1) {
-    const sample = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-    offset += 2;
+  for (let i = 0; i < mono.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, mono[i]));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
   }
 
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-async function handleVoiceBlob(blob, duration) {
-  const objectUrl = URL.createObjectURL(blob);
-  const bubble = appendUserVoiceBubble(duration, objectUrl);
-  const token = ++state.token;
+async function blobToWav(blob) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!AudioCtx || !OfflineCtx) {
+    throw new Error('当前浏览器不支持音频转码。');
+  }
 
-  setBusy(true);
-  showTyping(true);
+  const raw = await blob.arrayBuffer();
+  const ctx = new AudioCtx();
 
   try {
-    const upload = await blobToWav(blob).catch((err) => {
-      console.warn('WAV 转换失败，改为上传原始录音：', err);
-      return blob;
+    const decoded = await new Promise((resolve, reject) => {
+      ctx.decodeAudioData(raw.slice(0), resolve, reject);
     });
 
+    if (!decoded.length || !decoded.duration) {
+      throw new Error('录音内容为空。');
+    }
+
+    const targetRate = 16000;
+    const frames = Math.max(1, Math.ceil(decoded.duration * targetRate));
+    const offline = new OfflineCtx(1, frames, targetRate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start(0);
+
+    return encodeWav(await offline.startRendering());
+  } finally {
+    if (typeof ctx.close === 'function' && ctx.state !== 'closed') {
+      ctx.close().catch(() => {});
+    }
+  }
+}
+
+async function handleVoiceBlob(blob, duration) {
+  const objectUrl = URL.createObjectURL(blob);
+  appendUserVoiceBubble(duration, objectUrl);
+
+  const ownTyping = !state.busy && !state.queueRunning;
+  if (ownTyping) showTyping(true);
+
+  let audioData = '';
+  try {
+    audioData = await blobToDataUrl(blob);
+  } catch (err) {
+    console.error(`AI 报错：识别/${err && err.message}`);
+  }
+
+  let wav;
+  try {
+    // Whisper turbo 对 webm/opus 容器不稳定，先解码并重采样成 16k 单声道 WAV
+    wav = await blobToWav(blob);
+  } catch (err) {
+    console.error(`AI 报错：识别/${err && err.message}`);
+    if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
+    showToast('录音处理失败，请再说一次。');
+    if (ownTyping) showTyping(false);
+    return;
+  }
+
+  try {
     const data = await requestJson('/api/asr', {
       method: 'POST',
-      headers: { 'content-type': upload.type || blob.type || 'audio/webm' },
-      body: upload,
+      headers: { 'content-type': 'audio/wav' },
+      body: wav,
       timeout: 45000,
     });
 
-    if (token !== state.token) return;
-
     const text = String(data.text || '').trim();
     if (!text || text === '（没听清）') {
-      bubble.setFailure('没听清，再说一次吧');
-      showTyping(false);
-      showToast('没听清，请靠近麦克风再说一次。');
+      if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
+      showToast('没听清，靠近麦克风再说一次。');
       return;
     }
 
-    bubble.setText(text);
-    addHistory('user', state.name, text);
-    showTyping(false);
-
-    await runChatTurn(text);
+    enqueueTurn(text, 'voice', audioData, duration);
   } catch (err) {
-    if (token !== state.token) return;
-    bubble.setFailure('转写失败');
-    showTyping(false);
-    appendSystemMessage(err.message);
+    if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
+    console.error(`AI 报错：识别/${err && err.message}`);
+    showToast('没听清，再说一次吧。');
   } finally {
-    if (token === state.token) setBusy(false);
+    if (ownTyping && !state.busy && !state.queueRunning) showTyping(false);
   }
 }
 
@@ -910,7 +1153,8 @@ function enterRoom() {
 
   state.gender = myGender;
   state.name = name;
-  primeSpeech();
+  state.queue = [];
+  state.queueRunning = false;
 
   setupPage.classList.remove('active');
   chatPage.classList.add('active');
@@ -920,8 +1164,6 @@ function enterRoom() {
   state.history = loadHistory();
   renderHistory();
   scrollToBottom();
-
-  if (!synth) showToast('当前浏览器不支持语音朗读，将以文字显示回复。');
 
   ensureMic();
   sendGreeting();
@@ -973,7 +1215,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('pagehide', () => {
-  stopSpeech();
+  stopAudio();
   releaseMic();
 });
 
@@ -981,14 +1223,48 @@ window.addEventListener('pagehide', () => {
 
 let deferredInstallPrompt = null;
 
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+  || window.matchMedia('(hover: none) and (pointer: coarse)').matches
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+  || window.navigator.standalone === true;
+
+function hideInstallButton() {
+  if (installBtn) installBtn.hidden = true;
+}
+
+function showInstallButton() {
+  // 明确禁止手机端安装入口：手机只用于聊天，不提供 PWA 安装。
+  if (!installBtn || isMobile || isStandalone) {
+    hideInstallButton();
+    return;
+  }
+
+  installBtn.hidden = false;
+  installBtn.textContent = '安装到桌面';
+}
+
+function installHint() {
+  showToast('请用 Chrome / Edge 打开本页，再从地址栏安装。');
+}
+
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
+
+  if (isMobile) {
+    hideInstallButton();
+    return;
+  }
+
   deferredInstallPrompt = event;
-  installBtn.hidden = false;
+  showInstallButton();
 });
 
 installBtn.addEventListener('click', async () => {
-  if (!deferredInstallPrompt) return;
+  if (!deferredInstallPrompt) {
+    installHint();
+    return;
+  }
 
   deferredInstallPrompt.prompt();
   await deferredInstallPrompt.userChoice;
@@ -1001,6 +1277,11 @@ window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
   installBtn.hidden = true;
 });
+
+// 手机端无论浏览器是否触发安装事件，都不显示入口。
+if (isMobile || isStandalone) {
+  hideInstallButton();
+}
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch((err) => {

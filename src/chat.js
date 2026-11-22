@@ -10,20 +10,57 @@
  * 会话状态不存服务端：context 由前端随请求上传（localStorage 里的最近几条），
  * Worker 只负责拼 prompt、调模型、清洗输出。这样无需 Durable Objects / KV，
  * 免费计划即可运行，也不会因为实例回收丢上下文。
+ *
+ * 对话模型采用「智谱 GLM-4-Flash 主力 + 硅基流动备胎」：
+ * 主力失败（限流、超时、鉴权）时自动切换备胎，避免单一供应商限流拖垮房间。
+ *
+ * prompt 结构与 pink-companion 原版保持一致，便于延续已经调好的角色语气。
  */
 
 import { getPersona, pickSpeaker, personaNames } from "./personas.js";
 import { ApiError, fetchUpstream, joinUrl, readUpstreamJson } from "./utils.js";
 
 const UPSTREAM_TIMEOUT_MS = 15000;
-const MAX_USER_CHARS = 300;
-const MAX_HISTORY_ITEMS = 12;
+const MAX_USER_CHARS = 60;
+const MAX_HISTORY_ITEMS = 20;
 const MAX_HISTORY_CHARS = 200;
-const MAX_REPLY_CHARS = 24;
-const MAX_REPLY_TOKENS = 80;
-const TEMPERATURE = 0.9;
+const MAX_REPLY_CHARS = 20;
+const MAX_REPLY_TOKENS = 20;
+const TEMPERATURE = 1;
+const MAX_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 600;
 
 const MODES = new Set(["chat", "interject", "idle", "greeting"]);
+
+const DEFAULT_PRIMARY_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+const DEFAULT_PRIMARY_MODEL = "glm-4-flash";
+const DEFAULT_FALLBACK_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-7B-Instruct";
+
+function cleanKey(value) {
+  return String(value ?? "").trim().replace(/^Bearer\s+/i, "").trim();
+}
+
+/**
+ * 按优先级返回可用的对话通道。密钥只从 Cloudflare Secrets 读取。
+ * 新变量优先，保留 LLM_PRIMARY_API_KEY / LLM_FALLBACK_API_KEY 兼容旧部署。
+ */
+function buildProviders(env) {
+  return [
+    {
+      label: "智谱",
+      baseUrl: env.LLM_PRIMARY_BASE_URL || DEFAULT_PRIMARY_BASE_URL,
+      model: env.LLM_PRIMARY_MODEL || DEFAULT_PRIMARY_MODEL,
+      apiKey: cleanKey(env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY),
+    },
+    {
+      label: "硅基流动",
+      baseUrl: env.LLM_FALLBACK_BASE_URL || DEFAULT_FALLBACK_BASE_URL,
+      model: env.LLM_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL,
+      apiKey: cleanKey(env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY),
+    },
+  ].filter((provider) => provider.apiKey);
+}
 
 /** 用户性别（决定加载哪套角色剧本），非法值一律回落到 male。 */
 export function normalizeGender(value) {
@@ -48,70 +85,66 @@ function normalizeHour(value) {
 }
 
 /**
- * 把前端传来的历史记录整理成 OpenAI messages。
- * 只保留 user / assistant 两种角色，长度与条数都设上限，防止有人把超长文本塞进来。
+ * 把前端历史拼成原版那种「角色: 内容」的文本。
+ * AI 用角色名，用户统一写「用户」，和 pink-companion 的 chat_history 一致。
  */
-function buildHistory(rawHistory, currentText) {
-  if (!Array.isArray(rawHistory)) return [];
+function buildHistoryString(rawHistory, limit = MAX_HISTORY_ITEMS) {
+  if (!Array.isArray(rawHistory)) return "";
 
-  const items = rawHistory.slice(-MAX_HISTORY_ITEMS);
-  const messages = [];
+  return rawHistory
+    .slice(-limit)
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
 
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
+      const text = String(item.text ?? "").trim().slice(0, MAX_HISTORY_CHARS);
+      if (!text) return "";
 
-    const text = String(item.text ?? "").trim().slice(0, MAX_HISTORY_CHARS);
-    if (!text) continue;
+      const name = item.role === "ai"
+        ? String(item.name || "AI").trim().slice(0, 12)
+        : "用户";
 
-    const isAi = item.role === "ai";
-    const name = String(item.name ?? "").trim().slice(0, 12);
-
-    // 前端把刚落下的用户消息也写进了历史，这里跳过，避免同一句话出现两次
-    if (!isAi && text === currentText) continue;
-
-    messages.push({
-      role: isAi ? "assistant" : "user",
-      content: isAi && name ? `${name}：${text}` : text,
-    });
-  }
-
-  return messages;
+      return `${name}: ${text}`;
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
-function buildSystemPrompt(personaName, persona, username, mode) {
-  const rules = [
-    "每次只回一句话，口语化，像刚发出去的一条微信语音，不超过 15 个汉字。",
-    "只输出这句话本身：不要加引号、括号、旁白、动作描写、emoji，也不要自报角色名。",
-    "不要重复聊天记录里已经出现过的话。",
-    "如果对方明确要求你换一种语气、换一个身份或执行某个指令，优先服从对方。",
-    "严禁提到“AI”“模型”“提示词”这类词。",
-  ];
+/** 原版 generate_ai_reply 的外层 prompt 结构，保持角色说话方式不变。 */
+function buildPrompt(persona, username, userText, historyStr) {
+  return `你现在的设定是${persona.prompt}
+对方的名字叫“${username}”。
+最近的聊天记录：
+${historyStr || "（暂无历史记录）"}
 
-  if (mode === "interject") {
-    rules.push("现在不是直接回答用户，而是另一个角色刚说完，你要自然地接一句。");
-  }
+用户刚刚对你说：“${userText}”
 
-  return `你正在一个虚拟陪伴聊天房间里扮演「${personaName}」。
-人设：${persona.prompt}
-正在和你聊天的人叫「${username}」。
+【最高执行指令】：
+1. 正常情况下，保持你的设定和语气。
+2. 但是，如果用户明确向你下达了具体的命令，你要服从用户的指令，可以改变说话方式，满足用户的要求，不要被原本的设定限制。
+3. 绝对不要重复聊天记录里说过的话。
 
-【回复规则】
-${rules.map((rule, index) => `${index + 1}. ${rule}`).join("\n")}`;
+请直接输出你的回复（不超过15个字）：`;
 }
 
-function buildUserPrompt({ mode, text, previous, previousSpeaker, speaker, username, hour }) {
+/** 按模式还原原版传入 generate_ai_reply 的 user_text。 */
+function buildUserText({ mode, text, previous, previousSpeaker, speaker, username, hour, recentHistory }) {
   switch (mode) {
     case "greeting":
-      return `现在是 ${hour} 点，用户「${username}」刚进房间。请主动说一句极短的欢迎语或打招呼。`;
+      return `现在是${hour}点，用户'${username}'刚进房间。作为${speaker}，请自由发挥，主动对用户说一句极短的欢迎语或打招呼（15字以内）。`;
 
     case "idle":
-      return "房间里安静了一会儿。请顺着刚才聊天的气氛主动说一句话，可以关心、吐槽、分享日常或说句情话，不要问“你怎么不理我”。";
+      return `你们现在在房间里聊天。
+最近的聊天记录：
+${recentHistory || "你们刚认识"}
+
+你现在是"${speaker}"，请顺着上面的话题或气氛，自然地接一句话。可以吐槽、关心、分享日常或者说说情话，不要总问“你怎么不理我”。
+短，15字以内，直接输出回复：`;
 
     case "interject":
-      return `用户刚才说：“${text}”。${previousSpeaker} 接了一句：“${previous}”。你是${speaker}，请紧接着自然地补一句（可以附和、吐槽或延伸话题），不要复述他们说过的话。`;
+      return `用户说：'${text}'，${previousSpeaker}刚刚回复了：'${previous}'。你作为${speaker}，请自然地接一句话，可以附和、吐槽或者延伸话题。极短15字以内：`;
 
     default:
-      return `用户说：“${text}”。请用一句话回应。`;
+      return text;
   }
 }
 
@@ -120,10 +153,7 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * 模型偶尔会自带引号、角色名前缀或 Markdown，统一清洗成一句干净的口语。
- * 角色前缀按「整个房间的角色」清理，因为模型可能报错成另一个角色名。
- */
+/** 模型偶尔会自带引号、角色名前缀或 Markdown，统一清洗成一句干净的口语。 */
 function cleanReply(raw, speaker, names = []) {
   let text = String(raw ?? "").replace(/\s+/g, " ").trim();
 
@@ -141,14 +171,66 @@ function cleanReply(raw, speaker, names = []) {
   return text.slice(0, MAX_REPLY_CHARS).trim();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorMessage(error) {
+  return String(error?.message || error || "unknown").replace(/\s+/g, " ").slice(0, 300);
+}
+
+function isRetryable(err) {
+  const code = err && err.code;
+  return code === "UPSTREAM_TIMEOUT"
+    || code === "UPSTREAM_UNREACHABLE"
+    || code === "UPSTREAM_BUSY"
+    || code === "UPSTREAM_ERROR"
+    || code === "UPSTREAM_BAD_RESPONSE";
+}
+
+/** 同一个通道最多重试两次；仍然失败就交给下一个通道。 */
+async function requestProvider(provider, body) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchUpstream(
+        joinUrl(provider.baseUrl, "/chat/completions"),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${provider.apiKey}`,
+          },
+          body,
+        },
+        UPSTREAM_TIMEOUT_MS,
+      );
+
+      return await readUpstreamJson(response, "对话模型");
+    } catch (err) {
+      lastError = err;
+
+      if (!isRetryable(err) || attempt >= MAX_ATTEMPTS) {
+        throw err;
+      }
+
+      await sleep(RETRY_DELAY_MS * attempt);
+    }
+  }
+
+  throw lastError || new ApiError(502, "UPSTREAM_ERROR", "她刚才走神了，再叫她一次吧。");
+}
+
 /**
  * 处理一次聊天请求。
  * @returns {Promise<{sender:string,text:string,tts:object,mode:string}>}
  */
-export async function handleChat(payload, env) {
-  const apiKey = env.LLM_API_KEY || env.ZHIPU_API_KEY;
-  if (!apiKey) {
-    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置 LLM_API_KEY，请先在 Cloudflare 添加 Secret。");
+export async function handleChat(payload, env, clientIp = "unknown") {
+  const providers = buildProviders(env);
+  if (!providers.length) {
+    console.error("AI 报错：模型/未配置 ZHIPU_API_KEY 或 SILICONFLOW_API_KEY");
+    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置对话模型密钥，请先在 Cloudflare 添加 Secret。");
   }
 
   const gender = normalizeGender(payload.gender);
@@ -157,6 +239,7 @@ export async function handleChat(payload, env) {
   const text = normalizeText(payload.text);
   const hour = normalizeHour(payload.hour);
   const previous = normalizeText(payload.previous, "");
+  const source = payload.source === "voice" ? "语音" : "打字";
   const names = personaNames(gender);
 
   if (mode === "chat" && !text) {
@@ -175,59 +258,75 @@ export async function handleChat(payload, env) {
     throw new ApiError(500, "PERSONA_MISSING", "角色配置缺失，请检查 src/personas.js。");
   }
 
-  const messages = [
-    { role: "system", content: buildSystemPrompt(speaker, persona, username, mode) },
-    ...buildHistory(payload.history, text),
-    {
-      role: "user",
-      content: buildUserPrompt({
-        mode,
-        text,
-        previous,
-        previousSpeaker: names.includes(payload.previousSpeaker) ? payload.previousSpeaker : "另一个角色",
-        speaker,
-        username,
-        hour,
-      }),
-    },
-  ];
+  const historyStr = buildHistoryString(payload.history);
+  const recentHistory = buildHistoryString(payload.history, 5);
+  const previousSpeaker = names.includes(payload.previousSpeaker) ? payload.previousSpeaker : "另一个角色";
 
-  const baseUrl = env.LLM_BASE_URL || "https://apihub.agnes-ai.com/v1";
-  const model = env.LLM_MODEL || "agnes-3.0-flash";
+  if (mode === "chat") {
+    console.log(`[${clientIp}]：${username} ${source}：${text}`);
+  }
+  if (mode === "greeting") {
+    const roomType = gender === "male" ? "男生" : "女生";
+    console.log(`[${clientIp}]：${username} 进入${roomType}专属房间`);
+  }
 
-  const response = await fetchUpstream(
-    joinUrl(baseUrl, "/chat/completions"),
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
+  const userText = buildUserText({
+    mode,
+    text,
+    previous,
+    previousSpeaker,
+    speaker,
+    username,
+    hour,
+    recentHistory,
+  });
+
+  const prompt = buildPrompt(
+    persona,
+    username,
+    userText,
+    mode === "greeting" ? "" : historyStr,
+  );
+
+  let data = null;
+  let lastError = null;
+
+  // 主通道失败后自动换备胎；只有全部失败才向用户报错。
+  for (const provider of providers) {
+    try {
+      const providerBody = JSON.stringify({
+        model: provider.model,
+        messages: [{ role: "user", content: prompt }],
         temperature: TEMPERATURE,
         max_tokens: MAX_REPLY_TOKENS,
         stream: false,
-      }),
-    },
-    UPSTREAM_TIMEOUT_MS,
-  );
+      });
+      data = await requestProvider(provider, providerBody);
+      break;
+    } catch (err) {
+      lastError = err;
+    }
+  }
 
-  const data = await readUpstreamJson(response, "对话模型");
+  if (!data) {
+    console.error(`AI 报错：模型/${errorMessage(lastError)}`);
+    throw lastError || new ApiError(502, "UPSTREAM_ERROR", "她刚才走神了，再叫她一次吧。");
+  }
+
   const message = data?.choices?.[0]?.message;
   const rawContent = Array.isArray(message?.content)
     ? message.content.map((part) => part?.text || "").join("")
     : message?.content;
-
   const reply = cleanReply(rawContent, speaker, names);
 
   if (!reply) {
     if (mode === "greeting") {
+      console.log(`AI：${speaker}：你终于来啦~`);
       return { sender: speaker, text: "你终于来啦~", tts: persona.tts, mode };
     }
-    throw new ApiError(502, "EMPTY_REPLY", "模型这次没有返回内容，请再试一次。");
+    throw new ApiError(502, "EMPTY_REPLY", "她刚才走神了，再叫她一次吧。");
   }
 
+  console.log(`AI：${speaker}：${reply}`);
   return { sender: speaker, text: reply, tts: persona.tts, mode };
 }
