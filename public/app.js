@@ -574,7 +574,7 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
   scrollToBottom();
 }
 
-function appendUserVoiceBubble(duration, objectUrl) {
+function appendUserVoiceBubble(duration, objectUrl, fallbackUrl = '') {
   const msgDiv = document.createElement('div');
   msgDiv.className = 'msg user';
 
@@ -608,15 +608,29 @@ function appendUserVoiceBubble(duration, objectUrl) {
 
     stopAudio();
     const audio = new Audio();
+    let usedFallback = false;
+
+    const playSource = (source) => {
+      audio.src = source;
+      audio.load();
+      audio.play().catch(() => {
+        showToast('录音回放失败，请检查浏览器是否静音。');
+      });
+    };
+
     audio.preload = 'auto';
     audio.volume = 1;
-    audio.src = objectUrl;
-    audio.load();
     audio.addEventListener('error', () => {
-      showToast('录音回放失败，请重新录一次。');
-    }, { once: true });
+      if (!usedFallback && fallbackUrl && fallbackUrl !== objectUrl) {
+        usedFallback = true;
+        playSource(fallbackUrl);
+      } else {
+        showToast('录音回放失败，请重新录一次。');
+      }
+    });
+
     currentAudio = audio;
-    audio.play().catch(() => showToast('录音回放失败，请检查浏览器是否静音。'));
+    playSource(objectUrl);
   });
   bubble.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -1144,7 +1158,8 @@ async function handleVoiceBlob(blob, duration) {
   }
 
   const playbackUrl = URL.createObjectURL(wav);
-  appendUserVoiceBubble(duration, playbackUrl);
+  const originalUrl = URL.createObjectURL(blob);
+  appendUserVoiceBubble(duration, playbackUrl, originalUrl);
 
   try {
     const data = await requestJson('/api/asr', {
