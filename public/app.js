@@ -161,8 +161,9 @@ function applyLanguage(next = locale) {
   });
 
   langBtns.forEach((button) => {
-    button.textContent = locale === 'zh' ? 'EN' : '中文';
-    button.setAttribute('aria-label', locale === 'zh' ? 'Switch to English' : '切换到中文');
+    const active = button.dataset.langValue === locale;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 
   if (!voiceBtn.classList.contains('recording') && !voiceBtn.classList.contains('canceling')) {
@@ -405,6 +406,10 @@ function pauseLocalAudio() {
 function stopAudio() {
   pauseLocalAudio();
   currentAudio = null;
+  // 切换气泡或停止播放时，统一清掉所有残留动画，避免波形一直流动。
+  document.querySelectorAll('.voice-bubble.playing').forEach((element) => {
+    element.classList.remove('playing');
+  });
 }
 
 let silentAudioUrl = '';
@@ -432,18 +437,31 @@ function playAudioBlob(blob, bubble, dot, audio) {
   const player = audio || new Audio();
   currentAudio = player;
 
+  let finished = false;
+  let onTimeUpdate = null;
   const finish = () => {
+    if (finished) return;
+    finished = true;
     if (generation === audioGeneration) {
       bubble.classList.remove('playing');
       currentAudio = null;
     }
+    if (onTimeUpdate) player.removeEventListener('timeupdate', onTimeUpdate);
     URL.revokeObjectURL(url);
   };
 
   bubble.classList.add('playing');
   if (dot) dot.classList.remove('active');
 
+  onTimeUpdate = () => {
+    const duration = player.duration;
+    if (Number.isFinite(duration) && duration > 0 && player.currentTime >= duration - 0.08) {
+      finish();
+    }
+  };
+
   player.addEventListener('ended', finish, { once: true });
+  player.addEventListener('timeupdate', onTimeUpdate);
   player.addEventListener('error', () => {
     finish();
     showToast(tr('语音播放失败，先看文字吧。', 'Voice failed. Read the text.'));
@@ -515,6 +533,9 @@ async function requestAudio(payload) {
 
 async function playAiVoice({ text, tts, bubble, dot }) {
   if (!text) return;
+
+  // 先停掉上一条，避免旧气泡的播放状态和动画残留。
+  stopAudio();
 
   const generation = ++audioGeneration;
   bubble.classList.add('playing');
@@ -1460,10 +1481,13 @@ if (isMobile || isStandalone) {
   hideInstallButton();
 }
 
-langBtns.forEach((button) => {
-  button.addEventListener('click', () => {
-    setLocale(locale === 'zh' ? 'en' : 'zh');
-  });
+// 用事件委托绑定语言切换，避免按钮重绘或局部刷新后失效。
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-lang-btn]');
+  if (!button) return;
+
+  const next = button.dataset.langValue === 'en' ? 'en' : 'zh';
+  if (next !== locale) setLocale(next);
 });
 
 applyLanguage(locale);

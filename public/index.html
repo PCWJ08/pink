@@ -8,11 +8,14 @@
     <title>专属陪伴</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
-    <link rel="stylesheet" href="/theme.css">
+    <link rel="stylesheet" href="/theme.css?v=20261127">
 </head>
 <body>
     <div id="setup-page" class="page active">
-        <button type="button" class="lang-btn lang-btn-setup" data-lang-btn aria-label="Switch language">EN</button>
+        <div class="lang-switch lang-switch-setup" role="group" aria-label="Language">
+            <button type="button" class="lang-option" data-lang-btn data-lang-value="zh">中文</button>
+            <button type="button" class="lang-option" data-lang-btn data-lang-value="en">EN</button>
+        </div>
         <div class="setup-card">
             <h1 data-i18n="setupTitle">欢迎</h1>
             <p data-i18n="setupSubtitle">为了给你更好的陪伴，请告诉我...</p>
@@ -29,7 +32,10 @@
     <div id="chat-page" class="page">
         <div class="topbar">
             <div class="topbar-title"><span id="display-name">未命名</span><span id="room-suffix" data-i18n="roomSuffix"> 的房间</span></div>
-            <button type="button" class="lang-btn lang-btn-chat" data-lang-btn aria-label="Switch language">EN</button>
+            <div class="lang-switch lang-switch-chat" role="group" aria-label="Language">
+                <button type="button" class="lang-option" data-lang-btn data-lang-value="zh">中文</button>
+                <button type="button" class="lang-option" data-lang-btn data-lang-value="en">EN</button>
+            </div>
         </div>
 
         <div class="system-banner" data-i18n="banner">与你的专属陪伴体聊天吧</div>
@@ -49,6 +55,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="/app.js" defer></script>
+    <script src="/app.js?v=20261127" defer></script>
 </body>
 </html>

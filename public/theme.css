@@ -527,3 +527,61 @@ body::after {
     body::before { animation: none; }
     * { scroll-behavior: auto !important; }
 }
+
+/* 语言切换：两段式胶囊，清楚可点，不抢视觉 */
+.lang-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    border: 1px solid rgba(238, 141, 166, 0.2);
+    background: rgba(255, 255, 255, 0.035);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 2;
+}
+
+.lang-switch-setup {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+}
+
+.lang-switch-chat {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+}
+
+.lang-option {
+    min-width: 36px;
+    min-height: 30px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.lang-option:hover {
+    color: var(--pink-light);
+}
+
+.lang-option.active {
+    background: linear-gradient(135deg, rgba(238, 141, 166, 0.9), rgba(204, 116, 143, 0.88));
+    color: #fff;
+    box-shadow: 0 3px 10px rgba(238, 141, 166, 0.16);
+}
+
+@media (max-width: 360px) {
+    .lang-switch-chat { right: 8px; }
+    .lang-switch-setup { right: 10px; }
+    .lang-option { min-width: 33px; padding: 0 8px; }
+}
