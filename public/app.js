@@ -16,6 +16,8 @@ const nicknameInput = document.getElementById('nickname-input');
 const enterBtn = document.getElementById('enter-btn');
 const genderBtns = document.querySelectorAll('.gender-btn');
 const displayName = document.getElementById('display-name');
+const roomSuffix = document.getElementById('room-suffix');
+const langBtns = document.querySelectorAll('[data-lang-btn]');
 const messagesArea = document.getElementById('messages');
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
@@ -24,10 +26,65 @@ const toastEl = document.getElementById('toast');
 const installBtn = document.getElementById('install-btn');
 
 const STORAGE_PREFIX = 'pink_room_history_';
+const LANG_KEY = 'pink_language';
 const MAX_LOCAL_HISTORY = 20;
 const MAX_API_HISTORY = 20;
 const IDLE_DELAY_MS = 5000;
 const INTERJECT_DELAY_MS = 1500;
+
+const DICT = {
+  setupTitle: ['欢迎', 'Welcome'],
+  setupSubtitle: ['为了给你更好的陪伴，请告诉我...', 'Tell me a little about you...'],
+  nicknamePlaceholder: ['你的专属昵称', 'Your name'],
+  male: ['我是男生', "I'm a guy"],
+  female: ['我是女生', "I'm a girl"],
+  enter: ['开启心动房间', 'Enter the room'],
+  install: ['安装到桌面', 'Install on desktop'],
+  roomSuffix: [' 的房间', "'s room"],
+  unnamed: ['未命名', 'Unnamed'],
+  banner: ['与你的专属陪伴体聊天吧', 'Talk with your companion'],
+  voiceHold: ['按住说话', 'Hold to talk'],
+  voiceRelease: ['松开结束 (上滑取消)', 'Release to send (swipe up to cancel)'],
+  voiceCancel: ['松开取消', 'Release to cancel'],
+  chatPlaceholder: ['发消息...', 'Message...'],
+  send: ['发送', 'Send'],
+  footer: ['未登录 · 亲署', 'Not signed in · Pink Room'],
+  typing: ['对方正在输入...', 'typing...'],
+  transShow: ['转文字', 'Show text'],
+  transHide: ['收起', 'Hide'],
+  title: ['专属陪伴', 'Pink Room'],
+  description: [
+    '一个会主动开口的 AI 陪聊室，两个人格、同一屋檐、语音往返。',
+    'A quiet AI companion room with two voices, one roof, and real conversation.',
+  ],
+};
+
+let locale = 'zh';
+try {
+  locale = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
+} catch {
+  locale = 'zh';
+}
+
+function t(key) {
+  const entry = DICT[key];
+  return entry ? entry[locale === 'en' ? 1 : 0] : key;
+}
+
+function tr(zh, en) {
+  return locale === 'en' ? en : zh;
+}
+
+const AI_NAME_EN = {
+  '御姐': 'Emily',
+  '甜妹': 'Ana',
+  '暖男': 'Guy',
+  '霸总': 'Christopher',
+};
+
+function displayAiName(name) {
+  return locale === 'en' ? (AI_NAME_EN[name] || name) : name;
+}
 
 // 旧记录里 tts.voice 是 female / male，迁移时按角色名回到原来的神经音色。
 const VOICE_PRESETS = {
@@ -42,6 +99,7 @@ let myGender = 'male';
 const state = {
   gender: 'male',
   name: '',
+  locale,
   history: [],
   busy: false,
   token: 0,
@@ -70,6 +128,58 @@ function showToast(text) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), 2600);
+}
+
+function applyLanguage(next = locale) {
+  locale = next === 'en' ? 'en' : 'zh';
+  state.locale = locale;
+
+  try {
+    localStorage.setItem(LANG_KEY, locale);
+  } catch {
+    // ignore storage failures
+  }
+
+  document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
+  document.title = t('title');
+
+  const description = document.querySelector('meta[name="description"]');
+  if (description) description.setAttribute('content', t('description'));
+
+  document.querySelectorAll('[data-i18n]').forEach((element) => {
+    element.textContent = t(element.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((element) => {
+    element.setAttribute('placeholder', t(element.dataset.i18nPlaceholder));
+  });
+
+  if (displayName) displayName.textContent = state.name || t('unnamed');
+  if (roomSuffix) roomSuffix.textContent = t('roomSuffix');
+
+  document.querySelectorAll('[data-ai-name]').forEach((element) => {
+    element.textContent = displayAiName(element.dataset.aiName);
+  });
+
+  langBtns.forEach((button) => {
+    button.textContent = locale === 'zh' ? 'EN' : '中文';
+    button.setAttribute('aria-label', locale === 'zh' ? 'Switch to English' : '切换到中文');
+  });
+
+  if (!voiceBtn.classList.contains('recording') && !voiceBtn.classList.contains('canceling')) {
+    voiceBtn.textContent = t('voiceHold');
+  }
+  voiceBtn.setAttribute('aria-label', t('voiceHold'));
+
+  if (installBtn) installBtn.textContent = t('install');
+  if (typingEl) typingEl.textContent = t('typing');
+
+  document.querySelectorAll('.trans-btn').forEach((button) => {
+    button.textContent = button.dataset.expanded === '1' ? t('transHide') : t('transShow');
+  });
+}
+
+function setLocale(next) {
+  applyLanguage(next);
 }
 
 function historyKey() {
@@ -210,8 +320,8 @@ async function requestJson(path, { method = 'GET', headers = {}, body, timeout =
     });
   } catch (err) {
     const error = new Error(err && err.name === 'AbortError'
-      ? '请求超时，请检查网络后重试。'
-      : '网络连接失败，请稍后重试。');
+      ? tr('请求超时，请检查网络后重试。', 'Request timed out. Please try again.')
+      : tr('网络连接失败，请稍后重试。', 'Connection failed. Please try again.'));
     error.code = err && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
     throw error;
   } finally {
@@ -228,7 +338,7 @@ async function requestJson(path, { method = 'GET', headers = {}, body, timeout =
   if (!response.ok || !data || data.ok === false) {
     const error = new Error(data && data.error && data.error.message
       ? data.error.message
-      : `请求失败（HTTP ${response.status}）`);
+      : tr(`请求失败（HTTP ${response.status}）`, `Request failed (HTTP ${response.status})`));
 
     error.code = data && data.error && data.error.code
       ? data.error.code
@@ -242,17 +352,23 @@ async function requestJson(path, { method = 'GET', headers = {}, body, timeout =
 /** 聊天室的错误提示：限流/空回复用轻提示，配置错误才显示系统消息。 */
 function showChatError(err) {
   if (err && (err.code === 'UPSTREAM_BUSY' || err.code === 'EMPTY_REPLY')) {
-    showToast('她刚才走神了，再叫她一次吧。');
+    showToast(tr('她刚才走神了，再叫她一次吧。', 'She spaced out. Try again.'));
     return;
   }
 
-  appendSystemMessage(err && err.message ? err.message : '网络开小差了，再试一次吧。');
+  if (locale === 'en') {
+    appendSystemMessage('Something went wrong. Please try again.');
+    return;
+  }
+
+  appendSystemMessage(err && err.message ? err.message : tr('网络开小差了，再试一次吧。', 'Something went wrong. Try again.'));
 }
 
 function requestReply(options = {}) {
   const payload = {
     mode: options.mode || 'chat',
     source: options.source || 'text',
+    locale: state.locale,
     gender: state.gender,
     username: state.name,
     hour: new Date().getHours(),
@@ -330,7 +446,7 @@ function playAudioBlob(blob, bubble, dot, audio) {
   player.addEventListener('ended', finish, { once: true });
   player.addEventListener('error', () => {
     finish();
-    showToast('语音播放失败，先看文字吧。');
+    showToast(tr('语音播放失败，先看文字吧。', 'Voice failed. Read the text.'));
   }, { once: true });
 
   try {
@@ -340,11 +456,11 @@ function playAudioBlob(blob, bubble, dot, audio) {
     player.load();
     player.play().catch(() => {
       finish();
-      showToast('点击后仍未能播放，请检查浏览器是否静音。');
+      showToast(tr('点击后仍未能播放，请检查浏览器是否静音。', 'Playback was blocked. Check your device volume.'));
     });
   } catch {
     finish();
-    showToast('语音播放失败，先看文字吧。');
+    showToast(tr('语音播放失败，先看文字吧。', 'Voice failed. Read the text.'));
   }
 }
 
@@ -363,8 +479,8 @@ async function requestAudio(payload) {
     });
   } catch (err) {
     const error = new Error(err && err.name === 'AbortError'
-      ? '语音生成超时，请再点一次。'
-      : '网络连接失败，请稍后重试。');
+      ? tr('语音生成超时，请再点一次。', 'Voice generation timed out. Tap again.')
+      : tr('网络连接失败，请稍后重试。', 'Connection failed. Please try again.'));
     error.code = err && err.name === 'AbortError' ? 'TTS_TIMEOUT' : 'NETWORK_ERROR';
     throw error;
   } finally {
@@ -381,7 +497,7 @@ async function requestAudio(payload) {
 
     const error = new Error(data && data.error && data.error.message
       ? data.error.message
-      : `语音生成失败（HTTP ${response.status}）`);
+      : tr(`语音生成失败（HTTP ${response.status}）`, `Voice generation failed (HTTP ${response.status})`));
     error.code = data && data.error && data.error.code
       ? data.error.code
       : 'TTS_FAILED';
@@ -391,7 +507,7 @@ async function requestAudio(payload) {
 
   const type = response.headers.get('content-type') || '';
   if (!type.startsWith('audio/')) {
-    throw new Error('语音服务没有返回音频。');
+    throw new Error(tr('语音服务没有返回音频。', 'Voice service returned no audio.'));
   }
 
   return response.blob();
@@ -433,9 +549,9 @@ async function playAiVoice({ text, tts, bubble, dot }) {
     console.error(`AI 报错：TTS/${err && err.message}`);
 
     if (err && err.code === 'TTS_NOT_CONFIGURED') {
-      showToast('语音服务还没配置，先点「转文字」看内容吧。');
+      showToast(tr('语音服务还没配置，先点「转文字」看内容吧。', 'Voice is not configured. Tap Show text.'));
     } else {
-      showToast('语音暂时不可用，先点「转文字」看内容吧。');
+      showToast(tr('语音暂时不可用，先点「转文字」看内容吧。', 'Voice is unavailable. Tap Show text.'));
     }
   }
 }
@@ -447,7 +563,7 @@ function showTyping(show) {
     if (!typingEl) {
       typingEl = document.createElement('div');
       typingEl.className = 'typing';
-      typingEl.textContent = '对方正在输入...';
+      typingEl.textContent = t('typing');
       messagesArea.appendChild(typingEl);
       scrollToBottom();
     }
@@ -463,7 +579,12 @@ function appendTextMessage(text, role, senderName) {
 
   const nameDiv = document.createElement('div');
   nameDiv.className = 'sender-name';
-  nameDiv.textContent = role === 'user' ? (senderName || state.name) : (senderName || 'AI');
+  if (role === 'user') {
+    nameDiv.textContent = senderName || state.name;
+  } else {
+    nameDiv.dataset.aiName = senderName || 'AI';
+    nameDiv.textContent = displayAiName(senderName || 'AI');
+  }
 
   const bubble = document.createElement('div');
   bubble.className = 'text-bubble';
@@ -494,7 +615,8 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
 
   const nameDiv = document.createElement('div');
   nameDiv.className = 'sender-name';
-  nameDiv.textContent = sender;
+  nameDiv.dataset.aiName = sender;
+  nameDiv.textContent = displayAiName(sender);
 
   const rowDiv = document.createElement('div');
   rowDiv.className = 'bubble-row';
@@ -503,7 +625,7 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
   bubble.className = 'voice-bubble';
   bubble.tabIndex = 0;
   bubble.setAttribute('role', 'button');
-  bubble.setAttribute('aria-label', `播放 ${sender} 的语音`);
+  bubble.setAttribute('aria-label', tr(`播放 ${displayAiName(sender)} 的语音`, `Play ${displayAiName(sender)}'s voice`));
 
   const wave = document.createElement('div');
   wave.className = 'wave';
@@ -536,7 +658,7 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
       audio.addEventListener('error', finish, { once: true });
       audio.play().catch(() => {
         finish();
-        showToast('语音播放失败。');
+        showToast(tr('语音播放失败。', 'Voice playback failed.'));
       });
       return;
     }
@@ -557,7 +679,7 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
   // 字幕默认收起，点「转文字」再展开
   const transBtn = document.createElement('div');
   transBtn.className = 'trans-btn';
-  transBtn.textContent = '转文字';
+  transBtn.textContent = t('transShow');
 
   const transText = document.createElement('div');
   transText.className = 'trans-text';
@@ -565,7 +687,8 @@ function appendAiVoiceBubble(sender, text, tts, unread = true, audioUrl = '') {
 
   transBtn.addEventListener('click', () => {
     const shown = transText.classList.toggle('show');
-    transBtn.textContent = shown ? '收起' : '转文字';
+    transBtn.dataset.expanded = shown ? '1' : '0';
+    transBtn.textContent = shown ? t('transHide') : t('transShow');
   });
 
   rowDiv.appendChild(transBtn);
@@ -589,7 +712,7 @@ function appendUserVoiceBubble(duration, objectUrl, fallbackUrl = '') {
   bubble.className = 'voice-bubble';
   bubble.tabIndex = 0;
   bubble.setAttribute('role', 'button');
-  bubble.setAttribute('aria-label', '播放我刚录的语音');
+  bubble.setAttribute('aria-label', tr('播放我刚录的语音', 'Play my recording'));
 
   const wave = document.createElement('div');
   wave.className = 'wave';
@@ -602,7 +725,7 @@ function appendUserVoiceBubble(duration, objectUrl, fallbackUrl = '') {
 
   bubble.addEventListener('click', () => {
     if (!objectUrl) {
-      showToast('这段录音暂时无法回放。');
+      showToast(tr('这段录音暂时无法回放。', 'This recording cannot be played.'));
       return;
     }
 
@@ -614,7 +737,7 @@ function appendUserVoiceBubble(duration, objectUrl, fallbackUrl = '') {
       audio.src = source;
       audio.load();
       audio.play().catch(() => {
-        showToast('录音回放失败，请检查浏览器是否静音。');
+        showToast(tr('录音回放失败，请检查浏览器是否静音。', 'Recording playback failed. Check your device volume.'));
       });
     };
 
@@ -625,7 +748,7 @@ function appendUserVoiceBubble(duration, objectUrl, fallbackUrl = '') {
         usedFallback = true;
         playSource(fallbackUrl);
       } else {
-        showToast('录音回放失败，请重新录一次。');
+        showToast(tr('录音回放失败，请重新录一次。', 'Recording playback failed. Please record again.'));
       }
     });
 
@@ -662,7 +785,7 @@ function renderHistory() {
       return;
     }
 
-    appendTextMessage(item.text, item.role === 'user' ? 'user' : 'ai', item.role === 'user' ? item.name : 'AI');
+    appendTextMessage(item.text, item.role === 'user' ? 'user' : 'ai', item.role === 'user' ? item.name : (item.name || 'AI'));
   });
   saveHistory();
 }
@@ -864,7 +987,7 @@ async function ensureMic() {
   if (mediaRecorder) return true;
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
-    showToast('当前浏览器不支持录音，请改用文字聊天。');
+    showToast(tr('当前浏览器不支持录音，请改用文字聊天。', 'This browser does not support recording. Use text chat.'));
     return false;
   }
 
@@ -890,7 +1013,7 @@ async function ensureMic() {
     return true;
   } catch (err) {
     console.warn('麦克风获取失败：', err);
-    showToast('麦克风不可用，请允许麦克风权限，或先用文字聊天。');
+    showToast(tr('麦克风不可用，请允许麦克风权限，或先用文字聊天。', 'Microphone unavailable. Allow access or use text chat.'));
     return false;
   }
 }
@@ -929,11 +1052,11 @@ function onRecordingStop() {
 
   if (discardRecording) {
     discardRecording = false;
-    showToast('已取消录音。');
+    showToast(tr('已取消录音。', 'Recording cancelled.'));
     return;
   }
   if (!blob.size) {
-    showToast('没有录到声音，再试一次。');
+    showToast(tr('没有录到声音，再试一次。', 'No audio was captured. Try again.'));
     return;
   }
 
@@ -945,7 +1068,7 @@ function onVoicePressStart(event) {
 
   if (!mediaRecorder) {
     ensureMic().then((ok) => {
-      if (ok) showToast('麦克风已就绪，长按「按住说话」开始录音。');
+      if (ok) showToast(tr('麦克风已就绪，长按「按住说话」开始录音。', 'Microphone ready. Hold the button to record.'));
     });
     return;
   }
@@ -972,18 +1095,18 @@ function onVoicePressStart(event) {
     } catch (err) {
       console.warn('录音启动失败：', err);
       isLongPress = false;
-      showToast('录音启动失败，请重试。');
+      showToast(tr('录音启动失败，请重试。', 'Could not start recording. Try again.'));
       return;
     }
 
     maxDurationTimer = window.setTimeout(() => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
-        showToast('已自动结束录音。');
+        showToast(tr('已自动结束录音。', 'Recording stopped automatically.'));
         onVoicePressEnd();
       }
     }, 10000);
 
-    voiceBtn.textContent = '松开结束 (上滑取消)';
+    voiceBtn.textContent = t('voiceRelease');
     voiceBtn.classList.add('recording');
     chatInput.blur();
   }, 180);
@@ -1001,13 +1124,13 @@ function onVoicePressMove(event) {
       isCanceling = true;
       voiceBtn.classList.remove('recording');
       voiceBtn.classList.add('canceling');
-      voiceBtn.textContent = '松开取消';
+      voiceBtn.textContent = t('voiceCancel');
     }
   } else if (isCanceling) {
     isCanceling = false;
     voiceBtn.classList.add('recording');
     voiceBtn.classList.remove('canceling');
-    voiceBtn.textContent = '松开结束 (上滑取消)';
+    voiceBtn.textContent = t('voiceRelease');
   }
 }
 
@@ -1026,7 +1149,7 @@ function onVoicePressEnd(event) {
   if (isLongPress && mediaRecorder && mediaRecorder.state === 'recording') {
     discardRecording = shouldDiscard;
     voiceBtn.classList.remove('recording', 'canceling');
-    voiceBtn.textContent = '按住说话';
+    voiceBtn.textContent = t('voiceHold');
     try {
       mediaRecorder.stop();
     } catch {
@@ -1151,7 +1274,7 @@ async function handleVoiceBlob(blob, duration) {
     if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
     const objectUrl = URL.createObjectURL(blob);
     appendUserVoiceBubble(duration, objectUrl);
-    showToast('录音处理失败，请再说一次。');
+    showToast(tr('录音处理失败，请再说一次。', 'Audio processing failed. Try again.'));
     state.voiceBusy = false;
     if (ownTyping) showTyping(false);
     return;
@@ -1172,7 +1295,7 @@ async function handleVoiceBlob(blob, duration) {
     const text = String(data.text || '').trim();
     if (!text || text === '（没听清）') {
       if (audioData) addHistory('user', state.name, '', { audio: audioData, duration });
-      showToast('没听清，靠近麦克风再说一次。');
+      showToast(tr('没听清，靠近麦克风再说一次。', 'I did not catch that. Speak closer to the mic.'));
       return;
     }
 
@@ -1183,15 +1306,15 @@ async function handleVoiceBlob(blob, duration) {
     console.error(`AI 报错：识别/${err && err.message}`);
 
     if (err && err.code === 'CONFIG_MISSING') {
-      showToast('语音识别未启用，请检查 SILICONFLOW_API_KEY。');
+      showToast(tr('语音识别未启用，请检查 SILICONFLOW_API_KEY。', 'Speech recognition is not configured.'));
     } else if (err && err.code === 'ASR_TIMEOUT') {
-      showToast('语音识别超时，请再说一次。');
+      showToast(tr('语音识别超时，请再说一次。', 'Speech recognition timed out. Try again.'));
     } else if (err && err.code === 'ASR_SILENT') {
-      showToast('没有听到声音，靠近麦克风再说一次。');
+      showToast(tr('没有听到声音，靠近麦克风再说一次。', 'I did not hear anything. Speak closer to the mic.'));
     } else if (err && err.code === 'ASR_EMPTY') {
-      showToast('没听清，靠近麦克风再说一次。');
+      showToast(tr('没听清，靠近麦克风再说一次。', 'I did not catch that. Speak closer to the mic.'));
     } else {
-      showToast('语音识别失败，请稍后再试。');
+      showToast(tr('语音识别失败，请稍后再试。', 'Speech recognition failed. Try again.'));
     }
   } finally {
     state.voiceBusy = false;
@@ -1295,11 +1418,11 @@ function showInstallButton() {
   }
 
   installBtn.hidden = false;
-  installBtn.textContent = '安装到桌面';
+  installBtn.textContent = t('install');
 }
 
 function installHint() {
-  showToast('请用 Chrome / Edge 打开本页，再从地址栏安装。');
+  showToast(tr('请用 Chrome / Edge 打开本页，再从地址栏安装。', 'Open this page in Chrome or Edge, then install from the address bar.'));
 }
 
 window.addEventListener('beforeinstallprompt', (event) => {
@@ -1337,8 +1460,16 @@ if (isMobile || isStandalone) {
   hideInstallButton();
 }
 
+langBtns.forEach((button) => {
+  button.addEventListener('click', () => {
+    setLocale(locale === 'zh' ? 'en' : 'zh');
+  });
+});
+
+applyLanguage(locale);
+
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch((err) => {
+  navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((err) => {
     console.warn('Service Worker 注册失败：', err);
   });
 }

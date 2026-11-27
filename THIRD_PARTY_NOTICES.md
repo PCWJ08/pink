@@ -3,7 +3,8 @@
 ## Edge TTS protocol
 
 `src/edge-tts.js` includes a Worker port of the Sec-MS-GEC v2 token and
-WebSocket protocol from [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts).
+WebSocket protocol from [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
+and [edge-tts](https://github.com/rany2/edge-tts) (v2 token algorithm, PR #492).
 
 MIT License
 

@@ -25,7 +25,9 @@ const MAX_USER_CHARS = 60;
 const MAX_HISTORY_ITEMS = 20;
 const MAX_HISTORY_CHARS = 200;
 const MAX_REPLY_CHARS = 20;
+const MAX_REPLY_CHARS_EN = 160;
 const MAX_REPLY_TOKENS = 20;
+const MAX_REPLY_TOKENS_EN = 60;
 const TEMPERATURE = 1;
 const MAX_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 600;
@@ -110,7 +112,8 @@ function buildHistoryString(rawHistory, limit = MAX_HISTORY_ITEMS) {
 }
 
 /** 原版 generate_ai_reply 的外层 prompt 结构，保持角色说话方式不变。 */
-function buildPrompt(persona, username, userText, historyStr) {
+function buildPrompt(persona, username, userText, historyStr, locale = "zh") {
+  const english = locale === "en";
   return `你现在的设定是${persona.prompt}
 对方的名字叫“${username}”。
 最近的聊天记录：
@@ -124,18 +127,28 @@ ${historyStr || "（暂无历史记录）"}
 3. 绝对不要重复聊天记录里说过的话。
 4. 回复中禁止出现任何 Emoji、颜文字、表情符号或表情字符，只输出纯文字。
 5. 必须紧扣用户最后一句话回答，不要答非所问；不知道就简短追问。
+6. ${english ? "Reply in English only." : "请用中文回复。"}
 
-请直接输出你的回复（不超过15个字）：`;
+${english ? "Please reply directly in English (no more than 25 words):" : "请直接输出你的回复（不超过15个字）："}`;
 }
 
 /** 按模式还原原版传入 generate_ai_reply 的 user_text。 */
-function buildUserText({ mode, text, previous, previousSpeaker, speaker, username, hour, recentHistory }) {
+function buildUserText({ mode, text, previous, previousSpeaker, speaker, username, hour, recentHistory, locale = "zh" }) {
+  const en = locale === "en";
   switch (mode) {
     case "greeting":
-      return `现在是${hour}点，用户'${username}'刚进房间。作为${speaker}，请自由发挥，主动对用户说一句极短的欢迎语或打招呼（15字以内）。`;
+      return en
+        ? `It is ${hour}:00. The user '${username}' just entered the room. As ${speaker}, greet them warmly in one very short English sentence (no more than 12 words).`
+        : `现在是${hour}点，用户'${username}'刚进房间。作为${speaker}，请自由发挥，主动对用户说一句极短的欢迎语或打招呼（15字以内）。`;
 
     case "idle":
-      return `你们现在在房间里聊天。
+      return en
+        ? `You are chatting in the room.
+Recent chat:
+${recentHistory || "You just met"}
+
+You are "${speaker}". Continue the topic or mood naturally with one short English sentence. You may tease, care, share your day, or say something sweet. Do not keep asking why they are ignoring you. No more than 15 words. Reply directly:`
+        : `你们现在在房间里聊天。
 最近的聊天记录：
 ${recentHistory || "你们刚认识"}
 
@@ -143,7 +156,9 @@ ${recentHistory || "你们刚认识"}
 短，15字以内，直接输出回复：`;
 
     case "interject":
-      return `用户说：'${text}'，${previousSpeaker}刚刚回复了：'${previous}'。你作为${speaker}，请自然地接一句话，可以附和、吐槽或者延伸话题。极短15字以内：`;
+      return en
+        ? `The user said: '${text}'. ${previousSpeaker} just replied: '${previous}'. As ${speaker}, add one natural English sentence. You may agree, tease, or extend the topic. No more than 15 words:`
+        : `用户说：'${text}'，${previousSpeaker}刚刚回复了：'${previous}'。你作为${speaker}，请自然地接一句话，可以附和、吐槽或者延伸话题。极短15字以内：`;
 
     default:
       return text;
@@ -156,7 +171,7 @@ function escapeRegExp(value) {
 }
 
 /** 模型偶尔会自带引号、角色名前缀或 Markdown，统一清洗成一句干净的口语。 */
-function cleanReply(raw, speaker, names = []) {
+function cleanReply(raw, speaker, names = [], locale = "zh") {
   let text = String(raw ?? "").replace(/\s+/g, " ").trim();
 
   text = text.split("\n")[0].trim();
@@ -174,7 +189,7 @@ function cleanReply(raw, speaker, names = []) {
   text = text.replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}\u{200D}\u{20E3}]/gu, "");
   text = text.replace(/\s+/g, " ").trim();
 
-  return text.slice(0, MAX_REPLY_CHARS).trim();
+  return text.slice(0, locale === "en" ? MAX_REPLY_CHARS_EN : MAX_REPLY_CHARS).trim();
 }
 
 function sleep(ms) {
@@ -242,6 +257,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
   const gender = normalizeGender(payload.gender);
   const username = normalizeName(payload.username);
   const mode = MODES.has(payload.mode) ? payload.mode : "chat";
+  const locale = payload.locale === "en" ? "en" : "zh";
   const text = normalizeText(payload.text);
   const hour = normalizeHour(payload.hour);
   const previous = normalizeText(payload.previous, "");
@@ -285,6 +301,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
     username,
     hour,
     recentHistory,
+    locale,
   });
 
   const prompt = buildPrompt(
@@ -292,6 +309,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
     username,
     userText,
     mode === "greeting" ? "" : historyStr,
+    locale,
   );
 
   let data = null;
@@ -304,7 +322,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
         model: provider.model,
         messages: [{ role: "user", content: prompt }],
         temperature: TEMPERATURE,
-        max_tokens: MAX_REPLY_TOKENS,
+        max_tokens: locale === "en" ? MAX_REPLY_TOKENS_EN : MAX_REPLY_TOKENS,
         stream: false,
       });
       data = await requestProvider(provider, providerBody);
@@ -323,16 +341,18 @@ export async function handleChat(payload, env, clientIp = "unknown") {
   const rawContent = Array.isArray(message?.content)
     ? message.content.map((part) => part?.text || "").join("")
     : message?.content;
-  const reply = cleanReply(rawContent, speaker, names);
+  const reply = cleanReply(rawContent, speaker, names, locale);
+  const tts = locale === "en" && persona.ttsEn ? persona.ttsEn : persona.tts;
 
   if (!reply) {
     if (mode === "greeting") {
-      console.log(`[${speaker}AI]：你终于来啦~`);
-      return { sender: speaker, text: "你终于来啦~", tts: persona.tts, mode };
+      const fallback = locale === "en" ? "I've been waiting for you~" : "你终于来啦~";
+      console.log(`[${speaker}AI]：${fallback}`);
+      return { sender: speaker, text: fallback, tts, mode };
     }
     throw new ApiError(502, "EMPTY_REPLY", "她刚才走神了，再叫她一次吧。");
   }
 
   console.log(`[${speaker}AI]：${reply}`);
-  return { sender: speaker, text: reply, tts: persona.tts, mode };
+  return { sender: speaker, text: reply, tts, mode };
 }

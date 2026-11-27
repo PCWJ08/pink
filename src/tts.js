@@ -45,17 +45,26 @@ function readTtsBody(payload) {
 /**
  * @returns {Promise<{audio:Uint8Array,contentType:string}>}
  */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function handleTts(payload, env) {
   const input = readTtsBody(payload);
+  let lastError = null;
 
-  try {
-    const audio = await synthesizeEdge(input);
-    if (!audio || !audio.byteLength) {
-      throw new Error("Edge TTS 没有返回音频。");
+  // Edge 端点是共享出口，偶发 429 / 连接抖动；重试一次可降低失败率，同时避免用户等太久。
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const audio = await synthesizeEdge(input);
+      if (!audio || !audio.byteLength) {
+        throw new Error("Edge TTS 没有返回音频。");
+      }
+      return { audio, contentType: "audio/mpeg" };
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) await sleep(400 * attempt);
     }
-    return { audio, contentType: "audio/mpeg" };
-  } catch (err) {
-    console.error(`AI 报错：TTS/${err && (err.message || err)}`);
-    throw new ApiError(502, "TTS_FAILED", "语音服务暂时不可用，请稍后再点一次。");
   }
+
+  console.error(`AI 报错：TTS/${lastError && (lastError.message || lastError)}`);
+  throw new ApiError(502, "TTS_FAILED", "语音服务暂时不可用，请稍后再点一次。");
 }

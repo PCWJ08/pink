@@ -1,6 +1,8 @@
 node_modules/
 .wrangler/
 dist/
+.opencode/
+.tmp-*/
 
 *.log
 .DS_Store

@@ -3,7 +3,7 @@
  *
  * 微软 Edge 的“大声朗读”没有公开 HTTP API，但 Cloudflare Worker 可以通过
  * 出站 WebSocket 连接它的语音服务。协议与 Sec-MS-GEC v2 令牌算法参考
- * node-edge-tts（MIT License, Copyright (c) 2022 SchneeHertz）。
+ * node-edge-tts（MIT License, Copyright (c) 2022 SchneeHertz）与 rany2/edge-tts。
  *
  * 这是非官方接口，微软可能随时调整令牌或端点；失败时由 /api/tts 返回
  * 502，前端只显示文字，不会退回浏览器机械音。
@@ -11,16 +11,16 @@
 
 import { connect } from "cloudflare:sockets";
 
-const HOST = "api.msedgeservices.com";
+const HOST = "speech.platform.bing.com";
 const PORT = 443;
-const PATH = "/tts/cognitiveservices/websocket/v1";
-const WS_HOST_HEADER = "api.msedgeservices.com";
+const PATH = "/consumer/speech/synthesize/readaloud/edge/v1";
+const WS_HOST_HEADER = "speech.platform.bing.com";
 const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const CHROMIUM_FULL_VERSION = "143.0.3650.75";
 const CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split(".")[0];
 const SEC_MS_GEC_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
 const OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
-const TIMEOUT_MS = 20000;
+const TIMEOUT_MS = 12000;
 const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
 
 const PREFIX = Uint8Array.from(
@@ -394,7 +394,7 @@ export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" 
     await Promise.race([socket.opened, connectDeadline]);
 
     const handshake =
-      `GET ${PATH}?Ocp-Apim-Subscription-Key=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}&ConnectionId=${connectionId} HTTP/1.1\r\n` +
+      `GET ${PATH}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}&ConnectionId=${connectionId} HTTP/1.1\r\n` +
       `Host: ${WS_HOST_HEADER}\r\n` +
       "Upgrade: websocket\r\n" +
       "Connection: Upgrade\r\n" +

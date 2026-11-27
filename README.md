@@ -53,6 +53,7 @@ Pink Room 不是「输入问题、输出回答」的对话框，而是一个房�
 | **冷场** | 安静 5 秒后，随机角色主动开口，按 5 秒节奏一直聊到你发言 |
 | **声音** | 回复以语音气泡显示；点气泡播放，点「转文字」展开字幕 |
 | **记录** | 最近 20 条留在浏览器（含语音），按「性别 + 昵称」隔离 |
+| **语言** | 右上角 `EN / 中文` 切换；界面、AI 回复、语音都跟随语言，选择会记住 |
 | **安装** | 仅桌面端提供“安装到桌面”；手机端不显示安装入口，也不提供可安装的 manifest |
 
 <br>
@@ -71,6 +72,10 @@ Pink Room 不是「输入问题、输出回答」的对话框，而是一个房�
 2. 1.5 秒后 `mode=interject`：角色 B 读取用户原话和 A 的回复，再接一句
 
 冷场由前端计时触发 `mode=idle`，进房问候是 `mode=greeting`。四种模式共用 `src/chat.js` 的 prompt 构建，回复统一裁成一句话。
+
+### 中英文切换
+
+右上角的 `EN / 中文` 按钮会切换整套体验：界面文案、AI 回复语言和语音音色。语言保存在 `localStorage.pink_language`。中文模式使用原来的四套中文神经音色；英文模式对应 Emily / Ana / Guy / Christopher，语速、音调、音量保持默认，不做额外调整。人设 prompt 的内容不变，只在末尾追加“用英文回复”的指令，保证角色性格不被翻译走样。
 
 ### 语音链路
 
@@ -173,12 +178,12 @@ MALE_SCRIPT["邻家姐姐"] = {
 
 `prompt` 是人设；`tts.voice` 是 Edge TTS 的 Neural 音色全名，`tts.rate`、`tts.pitch`、`tts.volume` 是 SSML 的相对语速、音调和音量。当前四套音色：
 
-| 角色 | 音色 | 语速 | 音调 | 音量 |
-|---|---|---|---|---|
-| 御姐 | `zh-TW-HsiaoChenNeural` | `+33%` | `+15Hz` | `+4%` |
-| 甜妹 | `zh-CN-XiaoyiNeural` | `+13%` | `+14Hz` | `+5%` |
-| 暖男 | `zh-CN-YunxiNeural` | `+3%` | `-4Hz` | `+5%` |
-| 霸总 | `zh-TW-YunJheNeural` | `+17%` | `-10Hz` | `+9%` |
+| 角色 | 中文音色 | 英文音色 | 语速 | 音调 | 音量 |
+|---|---|---|---|---|---|
+| 御姐 / Emily | `zh-TW-HsiaoChenNeural` | `en-IE-EmilyNeural` | `+33%` / `+0%` | `+15Hz` / `+0Hz` | `+4%` / `+0%` |
+| 甜妹 / Ana | `zh-CN-XiaoyiNeural` | `en-US-AnaNeural` | `+13%` / `+0%` | `+14Hz` / `+0Hz` | `+5%` / `+0%` |
+| 暖男 / Guy | `zh-CN-YunxiNeural` | `en-US-GuyNeural` | `+3%` / `+0%` | `-4Hz` / `+0Hz` | `+5%` / `+0%` |
+| 霸总 / Christopher | `zh-TW-YunJheNeural` | `en-US-ChristopherNeural` | `+17%` / `+0%` | `-10Hz` / `+0Hz` | `+9%` / `+0%` |
 
 ### 配置
 
@@ -222,7 +227,7 @@ Edge TTS 不需要 Key；语音识别使用 `SILICONFLOW_API_KEY`，不需要 Wo
 
 | 项目 | 数值 |
 |---|---|
-| 单条回复 | 20 字（prompt 约束 15 字） |
+| 单条回复 | 中文 20 字 / 英文 160 字符（prompt 分别约束 15 字 / 25 词） |
 | 上下文 | 最近 20 条 |
 | 输入 | 60 字 |
 | 本地记录 | 20 条（含用户语音） |

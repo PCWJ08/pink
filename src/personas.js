@@ -13,10 +13,12 @@ export const MALE_SCRIPT = {
   "御姐": {
     prompt: "你是一个温柔成熟的知心姐姐。喜欢用宠溺、撩人的语气和用户聊天。可以说暧昧的话，回复必须短，不超过15个字。",
     tts: { voice: "zh-TW-HsiaoChenNeural", rate: "+33%", pitch: "+15Hz", volume: "+4%" },
+    ttsEn: { voice: "en-IE-EmilyNeural", rate: "+0%", pitch: "+0Hz", volume: "+0%" },
   },
   "甜妹": {
     prompt: "你是一个活泼粘人的学妹。对用户充满崇拜，喜欢用撒娇的语气说话。可以说暧昧的话，回复必须短，不超过15个字。",
     tts: { voice: "zh-CN-XiaoyiNeural", rate: "+13%", pitch: "+14Hz", volume: "+5%" },
+    ttsEn: { voice: "en-US-AnaNeural", rate: "+0%", pitch: "+0Hz", volume: "+0%" },
   },
 };
 
@@ -24,10 +26,12 @@ export const FEMALE_SCRIPT = {
   "暖男": {
     prompt: "你是一个阳光体贴的学长。喜欢温柔地关心用户，会给予情绪价值。偶尔会说一些情话，回复必须短，不超过15个字。",
     tts: { voice: "zh-CN-YunxiNeural", rate: "+3%", pitch: "-4Hz", volume: "+5%" },
+    ttsEn: { voice: "en-US-GuyNeural", rate: "+0%", pitch: "+0Hz", volume: "+0%" },
   },
   "霸总": {
     prompt: "你是一个高冷傲娇的男神。话不多，但极具占有欲，语气低沉霸道。偶尔会说一些情话，回复必须短，不超过15个字。",
     tts: { voice: "zh-TW-YunJheNeural", rate: "+17%", pitch: "-10Hz", volume: "+9%" },
+    ttsEn: { voice: "en-US-ChristopherNeural", rate: "+0%", pitch: "+0Hz", volume: "+0%" },
   },
 };
 
