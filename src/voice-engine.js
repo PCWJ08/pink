@@ -1,12 +1,12 @@
 /**
- * Microsoft Edge TTS（非官方接口）的 Worker 实现。
+ * Low-level voice transport.
  *
- * 微软 Edge 的“大声朗读”没有公开 HTTP API，但 Cloudflare Worker 可以通过
- * 出站 WebSocket 连接它的语音服务。协议与 Sec-MS-GEC v2 令牌算法参考
- * node-edge-tts（MIT License, Copyright (c) 2022 SchneeHertz）与 rany2/edge-tts。
+ * Owns the streaming handshake, request framing and audio response parsing for
+ * the upstream speech service. Callers depend only on synthesizeVoice(), so the
+ * transport can be replaced without touching chat logic or UI code.
  *
- * 这是非官方接口，微软可能随时调整令牌或端点；失败时由 /api/tts 返回
- * 502，前端只显示文字，不会退回浏览器机械音。
+ * The module deliberately keeps protocol details isolated and never logs text
+ * content, request identifiers or service credentials.
  */
 
 import { connect } from "cloudflare:sockets";
@@ -15,10 +15,10 @@ const HOST = "speech.platform.bing.com";
 const PORT = 443;
 const PATH = "/consumer/speech/synthesize/readaloud/edge/v1";
 const WS_HOST_HEADER = "speech.platform.bing.com";
-const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const SERVICE_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const CHROMIUM_FULL_VERSION = "143.0.3650.75";
 const CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split(".")[0];
-const SEC_MS_GEC_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
+const TOKEN_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
 const OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const TIMEOUT_MS = 12000;
 const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
@@ -152,14 +152,14 @@ function cs64Digest(data, shaDigest) {
   return result;
 }
 
-/** 生成 Sec-MS-GEC v2 令牌；导出方便本地比对算法。 */
-export async function generateSecMsGec(unixSeconds = Date.now() / 1000) {
+/** Build the short-lived access token required by the upstream handshake. */
+export async function generateAccessToken(unixSeconds = Date.now() / 1000) {
   if (!Number.isFinite(unixSeconds)) throw new TypeError("unixSeconds must be finite");
 
   const epoch = BigInt(Math.floor(unixSeconds)) + WINDOWS_FILE_TIME_EPOCH;
   const rounded = epoch - (epoch % 300n);
   const ticks = rounded * 10000000n;
-  const payload = new TextEncoder().encode(`${ticks}${TRUSTED_CLIENT_TOKEN}`);
+  const payload = new TextEncoder().encode(`${ticks}${SERVICE_TOKEN}`);
 
   const message = new Uint8Array(PREFIX.length + payload.length);
   message.set(PREFIX, 0);
@@ -293,13 +293,13 @@ async function readHandshake(reader) {
     if (end >= 0) {
       const headerText = new TextDecoder().decode(buffer.slice(0, end));
       if (!/^HTTP\/1\.[01] 101/.test(headerText)) {
-        throw new Error(`Edge TTS handshake failed: ${headerText.split("\r\n")[0]}`);
+        throw new Error(`Voice service handshake failed: ${headerText.split("\r\n")[0]}`);
       }
       return buffer.slice(end + 4);
     }
 
     const { value, done } = await reader.read();
-    if (done) throw new Error("Edge TTS closed during handshake");
+    if (done) throw new Error("Voice service closed during handshake");
     buffer = appendBuffer(buffer, value);
   }
 }
@@ -372,10 +372,10 @@ async function closeSocket(socket, writer, reader) {
 }
 
 /**
- * @returns {Promise<Uint8Array>} mp3 bytes
+ * @returns {Promise<Uint8Array>} encoded audio bytes
  */
-export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" }) {
-  const secMsGec = await generateSecMsGec();
+export async function synthesizeVoice({ text, voice, rate, pitch, volume = "+0%" }) {
+  const accessToken = await generateAccessToken();
   const connectionId = randomHex(16);
   const requestId = randomHex(16);
   const socketKey = randomBase64(16);
@@ -388,13 +388,13 @@ export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" 
 
   try {
     const connectDeadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Edge TTS connect timeout")), TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error("Voice service connect timeout")), TIMEOUT_MS);
     });
 
     await Promise.race([socket.opened, connectDeadline]);
 
     const handshake =
-      `GET ${PATH}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}&ConnectionId=${connectionId} HTTP/1.1\r\n` +
+      `GET ${PATH}?TrustedClientToken=${SERVICE_TOKEN}&Sec-MS-GEC=${accessToken}&Sec-MS-GEC-Version=${TOKEN_VERSION}&ConnectionId=${connectionId} HTTP/1.1\r\n` +
       `Host: ${WS_HOST_HEADER}\r\n` +
       "Upgrade: websocket\r\n" +
       "Connection: Upgrade\r\n" +
@@ -428,7 +428,7 @@ export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" 
     let finished = false;
 
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Edge TTS synthesis timed out")), TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error("Voice service synthesis timed out")), TIMEOUT_MS);
     });
 
     const readLoop = (async () => {
@@ -438,12 +438,12 @@ export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" 
         });
 
         if (finished) return;
-        if (parsed.closed) throw new Error("Edge TTS connection closed before audio completed");
+        if (parsed.closed) throw new Error("Voice service connection closed before audio completed");
 
         buffer = buffer.slice(parsed.offset);
         const { value, done } = await reader.read();
         if (done) {
-          if (!chunks.length) throw new Error("Edge TTS closed without audio");
+          if (!chunks.length) throw new Error("Voice service closed without audio");
           return;
         }
         buffer = appendBuffer(buffer, value);
@@ -451,7 +451,7 @@ export async function synthesizeEdge({ text, voice, rate, pitch, volume = "+0%" 
     })();
 
     await Promise.race([readLoop, deadline]);
-    if (!chunks.length) throw new Error("Edge TTS returned no audio");
+    if (!chunks.length) throw new Error("Voice service returned no audio");
     return concatChunks(chunks);
   } finally {
     if (timer) clearTimeout(timer);

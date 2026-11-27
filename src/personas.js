@@ -2,7 +2,7 @@
  * 角色剧本 —— 整个项目唯一需要改人设的地方。
  *
  * prompt：交给对话模型的人设描述。
- * tts   ：交给 /api/tts 的 Edge TTS 神经网络语音参数。
+ * tts   ：neural voice parameters passed to /api/tts.
  *         voice 是音色全名，rate/pitch/volume 是 SSML 的相对语速、音调与音量。
  *
  * 新增角色只要往 MALE_SCRIPT 或 FEMALE_SCRIPT 里追加一项，

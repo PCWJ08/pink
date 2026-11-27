@@ -2,136 +2,144 @@
 
 # Pink Room
 
-**一个会主动开口的 AI 陪聊室**
+**A quiet room for two voices.**
 
-两个人格、同一屋檐、语音往返
+一个安静、克制的 AI 陪伴空间。两个人格，同一屋檐，语音往返。
 
-[![在线试玩](https://img.shields.io/badge/在线试玩-ai.weidenglu.com-ff8eaa?style=flat-square&logo=googlechrome&logoColor=white)](https://ai.weidenglu.com)
+[![在线体验](https://img.shields.io/badge/在线体验-ai.weidenglu.com-ee8da6?style=flat-square&logo=googlechrome&logoColor=white)](https://ai.weidenglu.com)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![PWA](https://img.shields.io/badge/桌面端-可安装-5A0FC8?style=flat-square&logo=pwa&logoColor=white)](https://ai.weidenglu.com)
-[![License](https://img.shields.io/badge/License-MIT-ff8eaa?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-ee8da6?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-**在线试玩**：<https://ai.weidenglu.com>
+**在线体验**：<https://ai.weidenglu.com>
 
-Pink Room 不是「输入问题、输出回答」的对话框，而是一个房间。房间里住着两个性格相反的角色：你说话时，一个回应你；1.5 秒后另一个插话，附和、吐槽，或者把话题拽走。你沉默超过 5 秒，它们会自己接着聊下去，直到你再次开口。
+Pink Room 不是“输入问题、输出回答”的对话框，而是一个房间。房间里住着两个性格相反的角色：你说话时，一个回应你；片刻后另一个接话，附和、吐槽，或者把话题轻轻带走。你沉默一会儿，它们也会自己聊下去，直到你再次开口。
 
-回复以语音气泡呈现，带波形、秒数、未读红点，点一下由 Worker 生成 Edge 神经网络语音播放，也能展开成文字。桌面端可以安装到桌面，下次从图标打开，像一个小应用；手机端只保留聊天，不提供安装入口。
+回复以语音气泡呈现，带波形、时长和未读提示；点一下即可播放，也可以展开成文字。桌面端可以安装成一个独立的小应用，手机端只保留聊天本身。
 
-<br>
-
-## 界面预览
-
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/images/preview-room-male.jpeg" alt="男生房间：御姐 / 甜妹" /></td>
-    <td width="50%" align="center"><img src="docs/images/preview-room-female.jpeg" alt="女生房间：暖男 / 霸总" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>男生房间</b> · 御姐 &amp; 甜妹</sub></td>
-    <td align="center"><sub><b>女生房间</b> · 暖男 &amp; 霸总</sub></td>
-  </tr>
-</table>
-
-<div align="center">
-<img src="docs/images/preview-setup.jpeg" alt="入场页" width="58%" />
-<br>
-<sub>入场页 · 昵称与性别决定加载哪套剧本，聊天记录按房间隔离</sub>
-</div>
-
-<br>
-
-## 玩法
+## 体验
 
 | | |
 |---|---|
 | **房间** | 男生房住着御姐和甜妹，女生房住着暖男和霸总，性格两两相反 |
-| **对话** | 文字或按住说话（单次最长 10 秒）；角色 A 先回应，约 1.5 秒后角色 B 接着补一句 |
-| **冷场** | 安静 5 秒后，随机角色主动开口，按 5 秒节奏一直聊到你发言 |
-| **声音** | 回复以语音气泡显示；点气泡播放，点「转文字」展开字幕 |
-| **记录** | 最近 20 条留在浏览器（含语音），按「性别 + 昵称」隔离 |
-| **语言** | 右上角 `中文 / EN` 切换；界面、AI 回复、语音都跟随语言，选择会记住 |
-| **安装** | 仅桌面端提供“安装到桌面”；手机端不显示安装入口，也不提供可安装的 manifest |
+| **对话** | 文字或按住说话；一个角色先回应，另一个自然接话 |
+| **冷场** | 安静后角色会主动开口，保持房间里的呼吸感 |
+| **声音** | 语音气泡 + 可展开字幕，播放状态清晰但不喧闹 |
+| **语言** | 入场时选择中文或 English；进入房间后语言锁定 |
+| **记录** | 最近 20 条留在浏览器，按“性别 + 昵称”隔离 |
+| **安装** | 仅桌面端提供安装入口；手机端专注聊天 |
 
-<br>
+## 语言
+
+入场页右上角提供 `中文 / EN` 两段式切换。选择后会同时影响：
+
+- 界面文案
+- AI 回复语言
+- 角色显示名称（Emily / Ana / Guy / Christopher）
+- 语音音色
+
+进入房间后不再提供切换入口，避免对话中途改变语言导致上下文混乱。选择会保存在本机，下次打开继续沿用。
 
 ## 设计
 
-### 一个 Worker，两种接口
+### 克制的界面
 
-静态页面和 API 挂在同一个 Cloudflare Worker 上，同源，没有跨域。`public/` 交给 Workers Static Assets 直接分发，`/api/*` 进入 Worker。没有数据库，也没有常驻进程。
+以深色为底，用低对比粉光、细噪点和玻璃质感建立层次。没有高饱和装饰，也没有频繁动效；重点放在文字、留白和气泡节奏上。
 
-### 双人格调度
+### 双人格
 
-一次用户发言拆成两步：
+一次用户发言拆成两步：角色 A 先回应，角色 B 在短暂停顿后接话。冷场由前端计时触发，进房问候单独处理。角色只说自己的一句话，像真实的语音消息，而不是小作文。
 
-1. `mode=chat`：随机角色 A 按人设回复
-2. 1.5 秒后 `mode=interject`：角色 B 读取用户原话和 A 的回复，再接一句
+### 语音优先
 
-冷场由前端计时触发 `mode=idle`，进房问候是 `mode=greeting`。四种模式共用 `src/chat.js` 的 prompt 构建，回复统一裁成一句话。
+语音在服务端生成，前端只负责播放和字幕。录音会先在浏览器内整理成统一格式，再交给识别接口；自己发出的语音同样可以回放。语音服务不可用时，文字仍然完整保留。
 
-### 中英文切换
+### 隐私
 
-右上角的 `中文 / EN` 按钮会切换整套体验：界面文案、AI 回复语言和语音音色。语言保存在 `localStorage.pink_language`。中文模式使用原来的四套中文神经音色；英文模式对应 Emily / Ana / Guy / Christopher，语速、音调、音量保持默认，不做额外调整。人设 prompt 的内容不变，只在末尾追加“用英文回复”的指令，保证角色性格不被翻译走样。
+聊天记录和录音只保存在 `localStorage`，不会写入服务端数据库。Worker 不保存会话；刷新页面后仍能接着聊，换设备则从空白开始。
 
-### 语音链路
+## 部署
 
-- **输入**：MediaRecorder 录音（webm/mp4）→ 浏览器解码、重采样成 16kHz 单声道 WAV → `/api/asr` → 硅基流动 `FunAudioLLM/SenseVoiceSmall`
-- **输出**：`/api/tts` → Microsoft Edge TTS → mp3；音色、语速、音调由角色配置决定
+### 环境
 
-浏览器不再使用 `speechSynthesis` 朗读。录音先在浏览器里转成 16kHz 单声道 WAV，既方便 SenseVoice 识别，也避免手机浏览器直接播放 webm/mp4 Blob 时无声。
+- Node.js 20+
+- Cloudflare 账号
+- 一个指向 Worker 的域名
 
-Edge TTS 没有官方 HTTP API，也没有 SLA；Worker 通过出站 WebSocket 连接微软语音服务。微软调整令牌或端点时，`/api/tts` 会返回 502，前端只显示文字，不会退回机械的浏览器朗读。
+### 本地
 
-### 模型
-
-对话默认使用智谱 `glm-4-flash`，失败（限流、超时、鉴权）时自动切到硅基流动的 `Qwen/Qwen2.5-7B-Instruct`。两条通道都失败才向用户报错，避免单一供应商限流把房间卡死。
-
-语音识别使用硅基流动 SenseVoice。`SILICONFLOW_API_KEY` 同时用于对话备胎和语音识别；如果只配置智谱 Key，文字聊天可用，但语音识别不可用。
-
-### 日志
-
-Worker 日志统一为：
-
-```text
-[1.2.3.4]：小明 打字：今天好累
-[1.2.3.4]：小明 语音：今天好累
-[1.2.3.4]：小明 进入男生专属房间
-[御姐AI]：在呢
-[甜妹AI]：今天想我了吗
-[暖男AI]：早点休息
-[霸总AI]：过来
-AI 报错：模型/上游服务响应超时
-AI 报错：识别/未配置 SILICONFLOW_API_KEY
-AI 报错：TTS/Edge TTS handshake failed
+```bash
+npm install
+npx wrangler dev
 ```
 
-用户 IP 来自 Cloudflare 的 `CF-Connecting-IP`，只在 Worker 日志中出现，不会返回给浏览器。实时查看可在 Cloudflare Dashboard 的 `Workers & Pages → pink → Logs`，或使用 `npx wrangler tail pink`。
+### Cloudflare
 
-AI 提示词和输出清洗都禁止 Emoji、颜文字和表情符号，避免 Edge TTS 把它们读成奇怪文字。
+1. 在 Cloudflare 创建 Worker，名称设为 `pink`。
+2. 在 **Settings → Variables and Secrets** 添加：
+   - `ZHIPU_API_KEY`：对话主通道
+   - `SILICONFLOW_API_KEY`：对话备通道 + 语音识别
+3. 确认 `ALLOWED_ORIGIN` 与站点域名一致。
+4. 部署：
 
-### 记忆
+```bash
+npx wrangler deploy
+```
 
-聊天记录和用户语音只存在 `localStorage`，请求时附带最近 20 条文字。Worker 不保存会话，实例回收不影响上下文。刷新后还能接着聊，换设备则从空白开始。
+5. 在 Worker 的 **Settings → Domains & Routes** 绑定自定义域名。
+6. 打开 `/api/health` 检查配置状态，再强制刷新一次页面。
 
-### PWA
+### GitHub 自动部署
 
-`manifest.webmanifest` 提供桌面端的名称、图标与独立窗口；手机端由 Worker 返回 `display: browser`、无图标的不可安装 manifest，并隐藏安装按钮。`sw.js` 缓存页面和静态资源，但不缓存 `/api/*`。断网时能打开界面，聊天仍然需要联网。`_headers` 负责 manifest 的 MIME 和 Service Worker 的缓存策略。
+将仓库连接到 Cloudflare Workers Builds：
 
-### 几个取舍
+- Build command：`npm install`
+- Deploy command：`npx wrangler deploy`
+- Root directory：`/`
 
-回复限制在十几个字，是为了像一条语音消息，而不是小作文。没有使用 WebSocket，是因为每个角色只说一句话，前端控制节奏更简单，Worker 也不需要维护长连接。
+如果使用 GitHub Actions，自行配置 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。
 
-<br>
+## 配置
 
-## 技术栈
+`wrangler.jsonc` 已包含运行所需的普通变量，通常不需要手动改动：
 
-Cloudflare Workers · Workers Static Assets · 原生 JavaScript · 硅基流动 SenseVoice · Edge TTS · 智谱 GLM-4-Flash · 硅基流动
+| 变量 | 用途 |
+|---|---|
+| `LLM_PRIMARY_BASE_URL` | 对话主通道地址 |
+| `LLM_PRIMARY_MODEL` | 对话主通道模型 |
+| `LLM_FALLBACK_BASE_URL` | 对话备通道地址 |
+| `LLM_FALLBACK_MODEL` | 对话备通道模型 |
+| `ASR_BASE_URL` | 语音识别地址 |
+| `ASR_MODEL` | 语音识别模型 |
+| `ALLOWED_ORIGIN` | 允许的页面来源 |
 
-<br>
+密钥只放在 Cloudflare Secrets，不进入仓库：
+
+| Secret | 用途 |
+|---|---|
+| `ZHIPU_API_KEY` | 对话主通道 |
+| `SILICONFLOW_API_KEY` | 对话备通道 + 语音识别 |
+
+语音合成不需要额外 Key。
+
+## API
+
+| 地址 | 用途 |
+|---|---|
+| `POST /api/chat` | 生成一条角色回复，支持 `chat` / `interject` / `idle` / `greeting` |
+| `POST /api/asr` | 音频转文字 |
+| `POST /api/tts` | 文字转语音 |
+| `GET /api/health` | 检查对话、识别、语音配置是否就绪 |
+
+失败响应统一为：
+
+```json
+{ "ok": false, "error": { "code": "UPSTREAM_TIMEOUT", "message": "..." } }
+```
 
 ## 项目结构
 
@@ -146,14 +154,13 @@ pink/
 │   ├── _headers
 │   └── icons/
 ├── src/
-│   ├── index.js                # 接口路由、跨域、错误处理
-│   ├── chat.js                 # 人设 prompt 与双通道对话模型
-│   ├── asr.js                  # 硅基流动 SenseVoice 音频转文字
-│   ├── tts.js                  # Edge TTS 语音合成入口
-│   ├── edge-tts.js             # Edge TTS WebSocket 协议与令牌
-│   ├── personas.js             # 角色剧本与神经音色参数
-│   └── utils.js                # 超时与上游响应解析
-├── docs/images/
+│   ├── index.js              # 路由、跨域与错误处理
+│   ├── chat.js               # 角色上下文与对话编排
+│   ├── asr.js                # 语音识别
+│   ├── tts.js                # 语音合成入口
+│   ├── voice-engine.js       # 语音传输层
+│   ├── personas.js           # 角色剧本与音色参数
+│   └── utils.js              # 超时与上游响应处理
 ├── wrangler.jsonc
 ├── package.json
 ├── README.md
@@ -161,81 +168,11 @@ pink/
 └── LICENSE
 ```
 
-<br>
+## 说明
 
-## 开发说明
-
-### 角色
-
-角色都写在 `src/personas.js`。追加一项即可，前端不需要改，角色名与朗读参数会随接口返回：
-
-```js
-MALE_SCRIPT["邻家姐姐"] = {
-  prompt: "你是住在隔壁的插画师，说话慢、爱笑，喜欢用比喻。",
-  tts: { voice: "zh-CN-XiaoxiaoNeural", rate: "+5%", pitch: "+6Hz", volume: "+5%" },
-};
-```
-
-`prompt` 是人设；`tts.voice` 是 Edge TTS 的 Neural 音色全名，`tts.rate`、`tts.pitch`、`tts.volume` 是 SSML 的相对语速、音调和音量。当前四套音色：
-
-| 角色 | 中文音色 | 英文音色 | 语速 | 音调 | 音量 |
-|---|---|---|---|---|---|
-| 御姐 / Emily | `zh-TW-HsiaoChenNeural` | `en-IE-EmilyNeural` | `+33%` / `+0%` | `+15Hz` / `+0Hz` | `+4%` / `+0%` |
-| 甜妹 / Ana | `zh-CN-XiaoyiNeural` | `en-US-AnaNeural` | `+13%` / `+0%` | `+14Hz` / `+0Hz` | `+5%` / `+0%` |
-| 暖男 / Guy | `zh-CN-YunxiNeural` | `en-US-GuyNeural` | `+3%` / `+0%` | `-4Hz` / `+0Hz` | `+5%` / `+0%` |
-| 霸总 / Christopher | `zh-TW-YunJheNeural` | `en-US-ChristopherNeural` | `+17%` / `+0%` | `-10Hz` / `+0Hz` | `+9%` / `+0%` |
-
-### 配置
-
-`wrangler.jsonc` 里的普通变量：
-
-| 名称 | 说明 |
-|---|---|
-| `LLM_PRIMARY_BASE_URL` | 主力对话地址，默认智谱 `https://open.bigmodel.cn/api/paas/v4` |
-| `LLM_PRIMARY_MODEL` | 主力模型，默认 `glm-4-flash` |
-| `LLM_FALLBACK_BASE_URL` | 备胎对话地址，默认硅基流动 |
-| `LLM_FALLBACK_MODEL` | 备胎模型，默认 `Qwen/Qwen2.5-7B-Instruct` |
-| `ASR_BASE_URL` | 语音识别地址，默认 `https://api.siliconflow.cn/v1` |
-| `ASR_MODEL` | 语音识别模型，默认 `FunAudioLLM/SenseVoiceSmall` |
-| `ALLOWED_ORIGIN` | 允许的页面来源，当前是 `https://ai.weidenglu.com` |
-
-密钥不进入仓库，通过 Cloudflare Worker 的 Secrets 注入：
-
-| Secret | 用途 |
-|---|---|
-| `ZHIPU_API_KEY` | 智谱 GLM 主力 |
-| `SILICONFLOW_API_KEY` | 硅基流动对话备胎 + 语音识别 |
-
-Edge TTS 不需要 Key；语音识别使用 `SILICONFLOW_API_KEY`，不需要 Workers AI 绑定。
-
-### 接口
-
-| 地址 | 用途 |
-|---|---|
-| `POST /api/chat` | 文字聊天，支持 `chat` / `interject` / `idle` / `greeting` |
-| `POST /api/asr` | 16kHz 单声道 WAV 音频转文字 |
-| `POST /api/tts` | JSON `{ text, voice, rate, pitch, volume }` → mp3 |
-| `GET /api/health` | 检查对话、识别、语音三套配置是否就绪 |
-
-失败时统一返回：
-
-```json
-{ "ok": false, "error": { "code": "UPSTREAM_TIMEOUT", "message": "..." } }
-```
-
-### 限制
-
-| 项目 | 数值 |
-|---|---|
-| 单条回复 | 中文 20 字 / 英文 160 字符（prompt 分别约束 15 字 / 25 词） |
-| 上下文 | 最近 20 条 |
-| 输入 | 60 字 |
-| 本地记录 | 20 条（含用户语音） |
-| 音频 | 单次最长 10 秒，上限 10MB |
-| 上游超时 | 对话 15 秒，识别 25 秒，语音 20 秒 |
-| 冷场 | 5 秒，持续到你发言 |
-
-项目以 Cloudflare Workers 运行，静态资源与接口同源；本地开发使用 `wrangler dev`。
+- 角色由语言模型实时生成，不代表任何真实人物，也不构成情感或心理建议。
+- 语音与对话均由服务端完成，前端不内置模型。
+- 上游服务波动时，界面会保留文字内容，不会退回机械朗读。
 
 <br>
 
@@ -244,8 +181,6 @@ Edge TTS 不需要 Key；语音识别使用 `SILICONFLOW_API_KEY`，不需要 Wo
 [MIT](LICENSE) © 2026 [PCWJ08](https://github.com/PCWJ08)
 
 可自由使用、修改、分发，含商业用途，只需保留版权与许可声明。
-
-> 角色均由大语言模型实时生成，不代表任何真实人物，也不构成情感或心理建议。
 
 <br>
 

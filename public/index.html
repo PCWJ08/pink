@@ -3,42 +3,78 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#121014">
-    <meta name="description" content="一个会主动开口的 AI 陪聊室，两个人格、同一屋檐、语音往返。">
-    <title>专属陪伴</title>
+    <meta name="theme-color" content="#0e0c10">
+    <meta name="description" content="一个安静、克制的 AI 陪伴空间，两个人格，同一屋檐。">
+    <title>Pink Room · 专属陪伴</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
-    <link rel="stylesheet" href="/theme.css?v=20261127">
+    <link rel="stylesheet" href="/theme.css?v=20261127b">
 </head>
 <body>
     <div id="setup-page" class="page active">
-        <div class="lang-switch lang-switch-setup" role="group" aria-label="Language">
-            <button type="button" class="lang-option" data-lang-btn data-lang-value="zh">中文</button>
-            <button type="button" class="lang-option" data-lang-btn data-lang-value="en">EN</button>
-        </div>
-        <div class="setup-card">
-            <h1 data-i18n="setupTitle">欢迎</h1>
-            <p data-i18n="setupSubtitle">为了给你更好的陪伴，请告诉我...</p>
-            <input type="text" id="nickname-input" placeholder="你的专属昵称" maxlength="8" autocomplete="off" data-i18n-placeholder="nicknamePlaceholder">
-            <div class="gender-select">
-                <button type="button" class="gender-btn active" data-gender="male" data-i18n="male">我是男生</button>
-                <button type="button" class="gender-btn" data-gender="female" data-i18n="female">我是女生</button>
-            </div>
-            <button type="button" id="enter-btn" disabled data-i18n="enter">开启心动房间</button>
-            <button type="button" id="install-btn" class="install-btn" hidden data-i18n="install">安装到桌面</button>
+        <div class="setup-shell">
+            <header class="setup-top">
+                <div class="brand" aria-label="Pink Room">
+                    <span class="brand-mark"><span></span></span>
+                    <span class="brand-text">PINK ROOM</span>
+                </div>
+                <div class="lang-switch" role="group" aria-label="Language">
+                    <button type="button" class="lang-option" data-lang-btn data-lang-value="zh">中文</button>
+                    <button type="button" class="lang-option" data-lang-btn data-lang-value="en">EN</button>
+                </div>
+            </header>
+
+            <main class="setup-main">
+                <section class="setup-intro">
+                    <p class="eyebrow" data-i18n="setupEyebrow">私享陪伴空间</p>
+                    <h1 data-i18n="setupTitle">今晚，想和谁说说话？</h1>
+                    <p class="setup-subtitle" data-i18n="setupSubtitle">两个人格，同一屋檐。你开口，回应会自然接上。</p>
+                    <div class="intro-line"></div>
+                    <p class="intro-note" data-i18n="setupNote">文字或语音 · 无需注册 · 只属于你的房间</p>
+                </section>
+
+                <section class="setup-card">
+                    <div class="card-head">
+                        <span class="card-index">01</span>
+                        <span class="card-label" data-i18n="setupFormLabel">创建你的房间</span>
+                    </div>
+
+                    <label class="field-label" for="nickname-input" data-i18n="nicknameLabel">怎么称呼你</label>
+                    <input type="text" id="nickname-input" placeholder="输入你的昵称" maxlength="8" autocomplete="off" data-i18n-placeholder="nicknamePlaceholder">
+                    <p class="field-hint" data-i18n="nicknameHint">最多 8 个字符，仅保存在本机</p>
+
+                    <p class="field-label" data-i18n="genderLabel">你的身份</p>
+                    <div class="gender-select">
+                        <button type="button" class="gender-btn active" data-gender="male">
+                            <span class="gender-title" data-i18n="male">我是男生</span>
+                            <span class="gender-sub" data-i18n="maleHint">御姐 · 甜妹</span>
+                        </button>
+                        <button type="button" class="gender-btn" data-gender="female">
+                            <span class="gender-title" data-i18n="female">我是女生</span>
+                            <span class="gender-sub" data-i18n="femaleHint">暖男 · 霸总</span>
+                        </button>
+                    </div>
+
+                    <button type="button" id="enter-btn" disabled data-i18n="enter">进入房间</button>
+                    <button type="button" id="install-btn" class="install-btn" hidden data-i18n="install">安装到桌面</button>
+                    <p class="privacy-note" data-i18n="privacyNote">聊天记录只保存在这台设备</p>
+                </section>
+            </main>
+
+            <footer class="setup-footer">
+                <span data-i18n="setupFooter">Pink Room · 私享陪伴空间</span>
+                <span class="footer-year">2026</span>
+            </footer>
         </div>
     </div>
 
     <div id="chat-page" class="page">
-        <div class="topbar">
+        <header class="topbar">
+            <div class="topbar-kicker">PINK ROOM</div>
             <div class="topbar-title"><span id="display-name">未命名</span><span id="room-suffix" data-i18n="roomSuffix"> 的房间</span></div>
-            <div class="lang-switch lang-switch-chat" role="group" aria-label="Language">
-                <button type="button" class="lang-option" data-lang-btn data-lang-value="zh">中文</button>
-                <button type="button" class="lang-option" data-lang-btn data-lang-value="en">EN</button>
-            </div>
-        </div>
+        </header>
 
-        <div class="system-banner" data-i18n="banner">与你的专属陪伴体聊天吧</div>
+        <div class="system-banner" data-i18n="banner">房间已为你点亮，慢慢说</div>
 
         <div id="messages"></div>
 
@@ -55,6 +91,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="/app.js?v=20261127" defer></script>
+    <script src="/app.js?v=20261127b" defer></script>
 </body>
 </html>

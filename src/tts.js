@@ -1,15 +1,12 @@
 /**
- * 文本转语音：Microsoft Edge TTS（非官方接口）。
+ * Speech synthesis endpoint.
  *
- * 不使用 Azure，也不需要任何语音 Key。音色、语速、音调直接沿用角色配置：
- * zh-TW-HsiaoChenNeural / zh-CN-XiaoyiNeural / zh-CN-YunxiNeural /
- * zh-TW-YunJheNeural，配合原来的 rate / pitch / volume。
- *
- * Edge TTS 没有官方 SLA，微软调整接口时会失败；接口会明确返回 502，
- * 前端只显示文字，不会退回机械的浏览器 speechSynthesis。
+ * Validates text and prosody input, delegates audio generation to the isolated
+ * voice transport, and returns an audio response. Upstream details and
+ * credentials stay inside the transport; failures degrade to text-only playback.
  */
 
-import { synthesizeEdge } from "./edge-tts.js";
+import { synthesizeVoice } from "./voice-engine.js";
 import { ApiError } from "./utils.js";
 
 const DEFAULT_VOICE = "zh-CN-XiaoyiNeural";
@@ -51,12 +48,12 @@ export async function handleTts(payload, env) {
   const input = readTtsBody(payload);
   let lastError = null;
 
-  // Edge 端点是共享出口，偶发 429 / 连接抖动；重试一次可降低失败率，同时避免用户等太久。
+  // The upstream can fail transiently; retry once without making the user wait too long.
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      const audio = await synthesizeEdge(input);
+      const audio = await synthesizeVoice(input);
       if (!audio || !audio.byteLength) {
-        throw new Error("Edge TTS 没有返回音频。");
+        throw new Error("语音服务没有返回音频。");
       }
       return { audio, contentType: "audio/mpeg" };
     } catch (err) {

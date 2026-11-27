@@ -1,14 +1,14 @@
 /**
- * Cloudflare Worker 入口。
+ * Cloudflare Worker entry point.
  *
- * 一个 Worker 同时承担三件事：
- *   1. /api/chat  纯文本聊天（智谱主力 + 硅基流动备胎）
- *   2. /api/asr   音频转文字（硅基流动 SenseVoice）
- *   3. /api/tts   文本转语音（Microsoft Edge TTS）
- *   4. 其余请求交给静态资源（Cloudflare Workers Static Assets，目录 public/）
+ * One Worker serves four concerns:
+ *   1. /api/chat  conversation endpoint (primary + fallback)
+ *   2. /api/asr   speech recognition
+ *   3. /api/tts   speech synthesis
+ *   4. everything else is served from the static asset directory
  *
- * 不依赖任何本地服务、数据库或 KV；会话上下文由浏览器 localStorage 保存，
- * 每次请求随 body 带上来。整个应用只需要一个 Worker + 一个公开网址。
+ * The service is stateless: conversation context is held by the client and sent
+ * with each request. No database, queue or session store is required.
  */
 
 import { handleAsr } from "./asr.js";
@@ -111,8 +111,8 @@ function mobileManifestResponse() {
     start_url: "/",
     scope: "/",
     display: "browser",
-    background_color: "#121014",
-    theme_color: "#121014",
+    background_color: "#0e0c10",
+    theme_color: "#0e0c10",
     categories: ["entertainment", "social"],
     icons: [],
     prefer_related_applications: false,
@@ -161,17 +161,12 @@ export default {
             ok: true,
             service: "pink-room",
             time: new Date().toISOString(),
-            llmPrimaryConfigured: Boolean(env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY),
-            llmFallbackConfigured: Boolean(env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY),
-            asrConfigured: Boolean(env.SILICONFLOW_API_KEY || env.ASR_API_KEY),
-            ttsConfigured: true,
-            llmPrimaryBaseUrl: env.LLM_PRIMARY_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
-            llmPrimaryModel: env.LLM_PRIMARY_MODEL || "glm-4-flash",
-            llmFallbackBaseUrl: env.LLM_FALLBACK_BASE_URL || "https://api.siliconflow.cn/v1",
-            llmFallbackModel: env.LLM_FALLBACK_MODEL || "Qwen/Qwen2.5-7B-Instruct",
-            asrBaseUrl: env.ASR_BASE_URL || "https://api.siliconflow.cn/v1",
-            asrModel: env.ASR_MODEL || "FunAudioLLM/SenseVoiceSmall",
-            ttsProvider: "edge",
+            conversationConfigured: Boolean(
+              (env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY)
+              || (env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY)
+            ),
+            speechRecognitionConfigured: Boolean(env.SILICONFLOW_API_KEY || env.ASR_API_KEY),
+            speechSynthesisConfigured: true,
           },
           200,
           corsHeaders,

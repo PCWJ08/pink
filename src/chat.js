@@ -1,20 +1,18 @@
 /**
- * 纯文本聊天接口。
+ * Conversation endpoint.
  *
- * 一次请求只生成「一个角色的一句话」，四种模式：
- *   chat       用户发言后，房间里的角色 A 回复
- *   interject  角色 A 说完后，角色 B 接着插一句
- *   idle       房间冷场，随机角色主动开口
- *   greeting   用户刚进房间，随机角色打招呼
+ * Produces one short in-character reply per request. Four modes are supported:
+ *   chat       a character answers the user's latest message
+ *   interject  the other character adds a follow-up line
+ *   idle       a character speaks after a quiet period
+ *   greeting   a character welcomes the user on entry
  *
- * 会话状态不存服务端：context 由前端随请求上传（localStorage 里的最近几条），
- * Worker 只负责拼 prompt、调模型、清洗输出。这样无需 Durable Objects / KV，
- * 免费计划即可运行，也不会因为实例回收丢上下文。
+ * Conversation state is kept by the client and sent with each request. The
+ * Worker only builds context, calls the model and normalizes the output, so no
+ * server-side session storage is required.
  *
- * 对话模型采用「智谱 GLM-4-Flash 主力 + 硅基流动备胎」：
- * 主力失败（限流、超时、鉴权）时自动切换备胎，避免单一供应商限流拖垮房间。
- *
- * prompt 结构与 pink-companion 原版保持一致，便于延续已经调好的角色语气。
+ * A primary/fallback provider chain keeps the room responsive when one upstream
+ * is rate-limited or unavailable.
  */
 
 import { getPersona, pickSpeaker, personaNames } from "./personas.js";
@@ -50,13 +48,11 @@ function cleanKey(value) {
 function buildProviders(env) {
   return [
     {
-      label: "智谱",
       baseUrl: env.LLM_PRIMARY_BASE_URL || DEFAULT_PRIMARY_BASE_URL,
       model: env.LLM_PRIMARY_MODEL || DEFAULT_PRIMARY_MODEL,
       apiKey: cleanKey(env.ZHIPU_API_KEY || env.LLM_PRIMARY_API_KEY),
     },
     {
-      label: "硅基流动",
       baseUrl: env.LLM_FALLBACK_BASE_URL || DEFAULT_FALLBACK_BASE_URL,
       model: env.LLM_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL,
       apiKey: cleanKey(env.SILICONFLOW_API_KEY || env.LLM_FALLBACK_API_KEY),
@@ -88,7 +84,7 @@ function normalizeHour(value) {
 
 /**
  * 把前端历史拼成原版那种「角色: 内容」的文本。
- * AI 用角色名，用户统一写「用户」，和 pink-companion 的 chat_history 一致。
+ * AI messages use the character name; user messages use a neutral label.
  */
 function buildHistoryString(rawHistory, limit = MAX_HISTORY_ITEMS) {
   if (!Array.isArray(rawHistory)) return "";
@@ -111,7 +107,7 @@ function buildHistoryString(rawHistory, limit = MAX_HISTORY_ITEMS) {
     .join("\n");
 }
 
-/** 原版 generate_ai_reply 的外层 prompt 结构，保持角色说话方式不变。 */
+/** Build the outer prompt while preserving each character's established voice. */
 function buildPrompt(persona, username, userText, historyStr, locale = "zh") {
   const english = locale === "en";
   return `你现在的设定是${persona.prompt}
@@ -132,7 +128,7 @@ ${historyStr || "（暂无历史记录）"}
 ${english ? "Please reply directly in English (no more than 25 words):" : "请直接输出你的回复（不超过15个字）："}`;
 }
 
-/** 按模式还原原版传入 generate_ai_reply 的 user_text。 */
+/** Build the mode-specific user text passed to the model. */
 function buildUserText({ mode, text, previous, previousSpeaker, speaker, username, hour, recentHistory, locale = "zh" }) {
   const en = locale === "en";
   switch (mode) {
@@ -185,7 +181,7 @@ function cleanReply(raw, speaker, names = [], locale = "zh") {
   }
   text = text.replace(/^\*+|\*+$/g, "").trim();
 
-  // TTS 会把 Emoji 读成文字，统一剥掉所有表情字符与修饰符。
+  // Remove emoji and modifiers: speech synthesis would otherwise read them aloud.
   text = text.replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}\u{200D}\u{20E3}]/gu, "");
   text = text.replace(/\s+/g, " ").trim();
 
@@ -250,7 +246,7 @@ async function requestProvider(provider, body) {
 export async function handleChat(payload, env, clientIp = "unknown") {
   const providers = buildProviders(env);
   if (!providers.length) {
-    console.error("AI 报错：模型/未配置 ZHIPU_API_KEY 或 SILICONFLOW_API_KEY");
+    console.error("AI 报错：模型/未配置对话服务密钥");
     throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置对话模型密钥，请先在 Cloudflare 添加 Secret。");
   }
 
@@ -271,7 +267,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
     throw new ApiError(400, "EMPTY_CONTEXT", "插话模式需要同时提供用户原话和上一条回复。");
   }
 
-  // 插话必须换一个人，其余模式随机
+  // Interjections must come from the other character; other modes are random.
   const excludeSpeaker = mode === "interject" && names.includes(payload.previousSpeaker) ? payload.previousSpeaker : "";
   const speaker = pickSpeaker(gender, excludeSpeaker);
   const persona = getPersona(gender, speaker);
@@ -315,7 +311,7 @@ export async function handleChat(payload, env, clientIp = "unknown") {
   let data = null;
   let lastError = null;
 
-  // 主通道失败后自动换备胎；只有全部失败才向用户报错。
+  // Try the fallback provider; only surface an error after all providers fail.
   for (const provider of providers) {
     try {
       const providerBody = JSON.stringify({

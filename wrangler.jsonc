@@ -4,15 +4,15 @@
   "main": "src/index.js",
   "compatibility_date": "2026-11-01",
 
-  // 静态资源：public/ 直接由 Cloudflare 边缘节点分发
+  // Static assets are served directly from the edge.
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    // /api/* 优先交给 Worker，其余路径交给静态资源，避免路由歧义
+    // API routes and the manifest are handled by the Worker first.
     "run_worker_first": ["/api/*", "/manifest.webmanifest"]
   },
 
-  // 语音识别使用硅基流动 SenseVoice
+  // Runtime configuration.
   "vars": {
     "LLM_PRIMARY_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
     "LLM_PRIMARY_MODEL": "glm-4-flash",

@@ -1,14 +1,14 @@
 # Third-party notices
 
-## Edge TTS protocol
+## Voice transport
 
-`src/edge-tts.js` includes a Worker port of the Sec-MS-GEC v2 token and
-WebSocket protocol from [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
-and [edge-tts](https://github.com/rany2/edge-tts) (v2 token algorithm, PR #492).
+`src/voice-engine.js` includes portions of an MIT-licensed streaming
+transport implementation. The original copyright notices are retained below.
 
 MIT License
 
 Copyright (c) 2022 SchneeHertz
+Copyright (c) 2022 rany2
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

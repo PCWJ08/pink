@@ -1,11 +1,11 @@
 /**
- * 音频转文字接口。
+ * Speech recognition endpoint.
  *
- * 前端把 MediaRecorder 的 webm/mp4 在浏览器里解码，重采样成 16kHz 单声道 WAV，
- * 再以二进制 POST 到 /api/asr。Worker 使用硅基流动 SenseVoice 识别。
+ * Accepts normalized audio from the client, validates size and duration, and
+ * returns recognized text. Silent input is rejected before it reaches the
+ * upstream service to avoid fabricated transcripts.
  *
- * 使用前需要在 Cloudflare 配置 SILICONFLOW_API_KEY。
- * 录入静音时直接返回 ASR_SILENT，不把空录音送进模型，避免模型幻觉出“在吗”。
+ * The recognition credential is read from Cloudflare Secrets.
  */
 
 import { ApiError, fetchUpstream, joinUrl, readUpstreamJson } from "./utils.js";
@@ -83,8 +83,8 @@ export async function handleAsr(request, env) {
   env = env || {};
   const apiKey = String(env?.SILICONFLOW_API_KEY || env?.ASR_API_KEY || "").trim();
   if (!apiKey) {
-    console.error("AI 报错：识别/未配置 SILICONFLOW_API_KEY");
-    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置 SILICONFLOW_API_KEY，语音输入暂时不可用。");
+    console.error("AI 报错：识别/未配置语音识别密钥");
+    throw new ApiError(500, "CONFIG_MISSING", "服务端还没有配置语音识别密钥，语音输入暂时不可用。");
   }
 
   const contentType = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
@@ -131,7 +131,7 @@ export async function handleAsr(request, env) {
     const text = String(data?.text || "").replace(/\s+/g, " ").trim();
 
     if (!text) {
-      console.error("AI 报错：识别/SenseVoice 返回空文本");
+      console.error("AI 报错：识别/服务返回空文本");
       throw new ApiError(422, "ASR_EMPTY", "没听清，靠近麦克风再说一次。");
     }
 

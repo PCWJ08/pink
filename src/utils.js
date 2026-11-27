@@ -19,7 +19,7 @@ export class ApiError extends Error {
   }
 }
 
-/** 拼 URL，容忍 base 末尾有斜杠（智谱的 base 就带 /v4/）。 */
+/** Join a base URL and path, tolerating a trailing slash on the base. */
 export function joinUrl(base, path) {
   return `${String(base || "").replace(/\/+$/, "")}${path}`;
 }

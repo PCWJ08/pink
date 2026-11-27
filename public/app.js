@@ -1,11 +1,10 @@
 'use strict';
 
 /* ============================================================
-   Pink Room 前端交互
-   - 文本、语音识别、语音合成都通过 fetch 调用 Worker 接口
-   - AI 语音由 /api/tts 生成神经网络 mp3，不再使用浏览器 speechSynthesis
-   - 聊天记录保存在 localStorage，请求时附带最近几条作为上下文
-   - 录音保留原始文件用于回放，另转 16kHz WAV 用于 Whisper 识别
+   Pink Room client runtime
+   - Room setup, message rendering, recording and playback
+   - All network traffic uses same-origin API endpoints
+   - Recent conversation context is kept in localStorage
    ============================================================ */
 
 /* ---------------- 1. 元素与状态 ---------------- */
@@ -33,16 +32,26 @@ const IDLE_DELAY_MS = 5000;
 const INTERJECT_DELAY_MS = 1500;
 
 const DICT = {
-  setupTitle: ['欢迎', 'Welcome'],
-  setupSubtitle: ['为了给你更好的陪伴，请告诉我...', 'Tell me a little about you...'],
-  nicknamePlaceholder: ['你的专属昵称', 'Your name'],
+  setupEyebrow: ['私享陪伴空间', 'PRIVATE COMPANION'],
+  setupTitle: ['今晚，想和谁说说话？', "Who's on your mind tonight?"],
+  setupSubtitle: ['两个人格，同一屋檐。你开口，回应会自然接上。', 'Two voices, one room. Say something, and the conversation follows.'],
+  setupNote: ['文字或语音 · 无需注册 · 只属于你的房间', 'Text or voice · No sign-up · A room of your own'],
+  setupFormLabel: ['创建你的房间', 'Create your room'],
+  nicknameLabel: ['怎么称呼你', 'What should we call you?'],
+  nicknamePlaceholder: ['输入你的昵称', 'Your name'],
+  nicknameHint: ['最多 8 个字符，仅保存在本机', 'Up to 8 characters, saved on this device only'],
+  genderLabel: ['你的身份', 'Your profile'],
   male: ['我是男生', "I'm a guy"],
+  maleHint: ['御姐 · 甜妹', 'Emily · Ana'],
   female: ['我是女生', "I'm a girl"],
-  enter: ['开启心动房间', 'Enter the room'],
+  femaleHint: ['暖男 · 霸总', 'Guy · Christopher'],
+  enter: ['进入房间', 'Enter the room'],
   install: ['安装到桌面', 'Install on desktop'],
+  privacyNote: ['聊天记录只保存在这台设备', 'Chat history stays on this device'],
+  setupFooter: ['Pink Room · 私享陪伴空间', 'Pink Room · A private companion space'],
   roomSuffix: [' 的房间', "'s room"],
   unnamed: ['未命名', 'Unnamed'],
-  banner: ['与你的专属陪伴体聊天吧', 'Talk with your companion'],
+  banner: ['房间已为你点亮，慢慢说', 'The room is lit. Take your time.'],
   voiceHold: ['按住说话', 'Hold to talk'],
   voiceRelease: ['松开结束 (上滑取消)', 'Release to send (swipe up to cancel)'],
   voiceCancel: ['松开取消', 'Release to cancel'],
@@ -52,10 +61,10 @@ const DICT = {
   typing: ['对方正在输入...', 'typing...'],
   transShow: ['转文字', 'Show text'],
   transHide: ['收起', 'Hide'],
-  title: ['专属陪伴', 'Pink Room'],
+  title: ['Pink Room · 专属陪伴', 'Pink Room · Companion'],
   description: [
-    '一个会主动开口的 AI 陪聊室，两个人格、同一屋檐、语音往返。',
-    'A quiet AI companion room with two voices, one roof, and real conversation.',
+    '一个安静、克制的 AI 陪伴空间，两个人格、同一屋檐、语音往返。',
+    'A quiet, understated AI companion space with two voices, one room, and real conversation.',
   ],
 };
 
@@ -868,7 +877,7 @@ async function runChatTurn(turn) {
     showTyping(false);
     deliverReply(data.reply);
 
-    // 原版节奏：A 说完后等 1.5 秒，B 再补一句，然后才处理下一条用户消息
+    // Let the second character reply after a short pause, then process the next turn.
     await wait(INTERJECT_DELAY_MS);
     if (token !== state.token) return;
 
@@ -1182,7 +1191,7 @@ function onVoicePressEnd(event) {
   isCanceling = false;
 }
 
-/** 保存原始录音用于历史回放；另外转成 16kHz 单声道 WAV 供 Whisper 使用。 */
+/** Keep the original recording for playback; resample a mono WAV for recognition. */
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1287,8 +1296,8 @@ async function handleVoiceBlob(blob, duration) {
 
   let wav;
   try {
-    // Whisper turbo 对 webm/opus 容器不稳定，先解码并重采样成 16k 单声道 WAV。
-    // 同一份 WAV 也用于本地回放，避免 iOS 对 webm/mp4 Blob 播放不兼容。
+    // Normalize the recording to a mono WAV for recognition and local playback.
+    // This also avoids container playback issues on some mobile browsers.
     wav = await blobToWav(blob);
   } catch (err) {
     console.error(`AI 报错：识别/${err && err.message}`);
@@ -1327,7 +1336,7 @@ async function handleVoiceBlob(blob, duration) {
     console.error(`AI 报错：识别/${err && err.message}`);
 
     if (err && err.code === 'CONFIG_MISSING') {
-      showToast(tr('语音识别未启用，请检查 SILICONFLOW_API_KEY。', 'Speech recognition is not configured.'));
+      showToast(tr('语音识别未启用，请检查服务端配置。', 'Speech recognition is not configured.'));
     } else if (err && err.code === 'ASR_TIMEOUT') {
       showToast(tr('语音识别超时，请再说一次。', 'Speech recognition timed out. Try again.'));
     } else if (err && err.code === 'ASR_SILENT') {
@@ -1481,8 +1490,11 @@ if (isMobile || isStandalone) {
   hideInstallButton();
 }
 
-// 用事件委托绑定语言切换，避免按钮重绘或局部刷新后失效。
+// Language is chosen on the entry screen only. Delegation keeps this working
+// even if the switch is re-rendered or the page is restored from cache.
 document.addEventListener('click', (event) => {
+  if (!setupPage.classList.contains('active')) return;
+
   const button = event.target.closest('[data-lang-btn]');
   if (!button) return;
 
